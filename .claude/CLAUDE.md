@@ -90,9 +90,25 @@ CREW   → CORE : 이미지 파싱 / 통계
 ```
 1. FastAPI 기본 설치 및 Supabase 연결  ✅ 완료
 2. Swagger UI 확인                     ✅ 완료
-3. 이미지 파싱 API (Claude Vision)     ← 다음 작업
-4. 날씨 데이터 API (기상청)
+3. 이미지 파싱 API (GPT-4o Vision)     ✅ 완료
+4. 날씨 데이터 API (기상청)            ← 다음 작업
 5. 리뷰 요약 API (Claude API)
+```
+
+## 서버 인프라 (완료)
+
+```
+EC2: t3.micro / Ubuntu 24.04 / 13.125.109.144
+도메인: api.pac-run.com (HTTPS, Let's Encrypt)
+배포 경로: /var/www/fastapi
+서비스: systemd (core-api.service, 자동시작)
+```
+
+## AI 서비스
+
+```
+이미지 파싱: OpenAI GPT-4o (OPENAI_API_KEY)
+리뷰 요약/감정분석: 추후 설정
 ```
 
 ## 브랜치 규칙
