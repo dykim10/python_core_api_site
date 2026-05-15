@@ -1,10 +1,12 @@
 import json
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from datetime import date
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from decimal import Decimal
 
 from app.services.claude_client import invoke_with_image
+from app.core.database import crew_db
 
 router = APIRouter(prefix="/api", tags=["image"])
 
@@ -35,6 +37,9 @@ JSON 외에 다른 텍스트는 절대 포함하지 마세요."""
 
 
 class ParseImageResponse(BaseModel):
+    id: int
+    user_id: int
+    log_date: date
     distance_km: Optional[Decimal] = None
     avg_pace: Optional[str] = None
     best_pace: Optional[str] = None
@@ -43,11 +48,14 @@ class ParseImageResponse(BaseModel):
     avg_heart_rate: Optional[int] = None
     is_indoor: bool = False
     altitude_m: Optional[Decimal] = None
-    has_map: bool = False
 
 
 @router.post("/parse-image", response_model=ParseImageResponse)
-async def parse_image(file: UploadFile = File(...)):
+async def parse_image(
+    file: UploadFile = File(...),
+    user_id: int = Form(...),
+    log_date: date = Form(default_factory=date.today),
+):
     media_type = SUPPORTED_TYPES.get(file.content_type)
     if not media_type:
         raise HTTPException(status_code=400, detail=f"지원하지 않는 이미지 형식입니다: {file.content_type}")
@@ -59,9 +67,29 @@ async def parse_image(file: UploadFile = File(...)):
     try:
         raw = invoke_with_image(image_bytes, media_type, PARSE_PROMPT)
         cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        data = json.loads(cleaned)
-        return ParseImageResponse(**data)
+        parsed = json.loads(cleaned)
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail=f"AI 응답 파싱 실패: {raw}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    record = {
+        "user_id": user_id,
+        "log_date": str(log_date),
+        "distance_km": parsed.get("distance_km"),
+        "avg_pace": parsed.get("avg_pace"),
+        "best_pace": parsed.get("best_pace"),
+        "duration_sec": parsed.get("duration_sec"),
+        "calories": parsed.get("calories"),
+        "avg_heart_rate": parsed.get("avg_heart_rate"),
+        "is_indoor": parsed.get("is_indoor", False),
+        "altitude_m": parsed.get("altitude_m"),
+    }
+
+    try:
+        result = crew_db().table("running_logs").insert(record).execute()
+        saved = result.data[0]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DB 저장 실패: {str(e)}")
+
+    return ParseImageResponse(**saved)
