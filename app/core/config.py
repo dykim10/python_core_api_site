@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     supabase_key: str
     supabase_service_role_key: str = ""
     anthropic_api_key: str = ""
+    openai_api_key: str = ""
     app_env: str = "development"
 
     class Config:

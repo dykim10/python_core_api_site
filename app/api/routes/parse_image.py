@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from typing import Optional
 from decimal import Decimal
 
-from app.services.claude_client import invoke_claude_with_image
+from app.services.claude_client import invoke_with_image
 
 router = APIRouter(prefix="/api", tags=["image"])
 
@@ -57,10 +57,11 @@ async def parse_image(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="이미지 크기는 5MB 이하여야 합니다.")
 
     try:
-        raw = invoke_claude_with_image(image_bytes, media_type, PARSE_PROMPT)
-        data = json.loads(raw)
+        raw = invoke_with_image(image_bytes, media_type, PARSE_PROMPT)
+        cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        data = json.loads(cleaned)
         return ParseImageResponse(**data)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="AI 응답 파싱 실패")
+        raise HTTPException(status_code=500, detail=f"AI 응답 파싱 실패: {raw}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
