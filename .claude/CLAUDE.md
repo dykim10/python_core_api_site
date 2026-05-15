@@ -88,11 +88,18 @@ CREW   → CORE : 이미지 파싱 / 통계
 ## 개발 우선순위 (v1 목표)
 
 ```
-1. FastAPI 기본 설치 및 AWS EC2 연동
-2. Swagger UI 확인
-3. 이미지 파싱 API (Claude Vision)
+1. FastAPI 기본 설치 및 Supabase 연결  ✅ 완료
+2. Swagger UI 확인                     ✅ 완료
+3. 이미지 파싱 API (Claude Vision)     ← 다음 작업
 4. 날씨 데이터 API (기상청)
 5. 리뷰 요약 API (Claude API)
+```
+
+## 브랜치 규칙
+
+```
+dev  → 로컬 개발 (push/pull 기본)
+main → EC2 운영서버 (git pull)
 ```
 
 ---
