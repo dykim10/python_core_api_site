@@ -90,7 +90,7 @@ CREW   → CORE : 이미지 파싱 / 통계
 ```
 1. FastAPI 기본 설치 및 Supabase 연결  ✅ 완료
 2. Swagger UI 확인                     ✅ 완료
-3. 이미지 파싱 API (GPT-4o Vision)     ✅ 완료
+3. 이미지 파싱 API (GPT-4o Vision)     ✅ 완료 (DB 저장 연결)
 4. 날씨 데이터 API (기상청)            ← 다음 작업
 5. 리뷰 요약 API (Claude API)
 ```
