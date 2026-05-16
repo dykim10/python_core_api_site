@@ -22,7 +22,6 @@ ROADRUN_BASE    = "http://www.roadrun.co.kr"
 # ── 공통 유틸 ─────────────────────────────────────────────────────────────────
 
 def _compute_status(race: dict) -> str:
-    """날짜 기반 접수/진행 상태 계산"""
     today = date.today()
 
     def _d(val) -> Optional[date]:
@@ -74,10 +73,11 @@ def _parse_won(text: str) -> Optional[int]:
     return int(nums) if nums else None
 
 
-# 거리/종목 토큰 추출 패턴 (긴/구체적 패턴 우선)
+# ── 거리/종목 정규화 ──────────────────────────────────────────────────────────
+
 _DIST_PATTERN = re.compile(
     r"풀코스|풀마라톤|마라톤풀|하프마라톤|마라톤하프"
-    r"|마라톤\d+(?:\.\d+)?(?:km|KM|Km|K|k|m|마일)"  # 마라톤10km, 마라톤100km 등
+    r"|마라톤\d+(?:\.\d+)?(?:km|KM|Km|K|k|m|마일)"
     r"|풀|하프|마라톤"
     r"|걷기코스|걷기"
     r"|\d+(?:\.\d+)?(?:km|KM|Km|K|k|m|마일)"
@@ -92,38 +92,22 @@ _WORD_TO_NORM: dict[str, str] = {
 
 
 def _format_dist_num(num_str: str, unit: str) -> Optional[str]:
-    """숫자+단위 → XK / X마일 포맷. 비현실적 거리는 연도 제거 후 재시도."""
     num = float(num_str)
-
-    # 비현실적으로 큰 숫자 → 연도(202x) 접두사가 붙은 경우 제거
-    # 예: 202610 → 2026 + 10, 20265 → 2026 + 5
     if num > 300:
         year_m = re.match(r"^(202\d)(\d+(?:\.\d+)?)$", num_str)
         if year_m:
             num_str = year_m.group(2)
             num = float(num_str)
         else:
-            return None  # 연도 패턴도 아니면 무시
-
+            return None
     label = str(int(num)) if num == int(num) else num_str
-
     if unit.lower() == "마일":
         return f"{label}마일"
     return f"{label}K"
 
 
 def _normalize_distances(raw) -> list[str]:
-    """거리/종목을 풀/하프/XK/걷기 형태로 정규화.
-
-    실제 DB 데이터 기반 처리 케이스:
-    - 마라톤하프 → 하프 / 마라톤풀 → 풀
-    - 마라톤10km → 10K  (마라톤 접두사 + 숫자)
-    - 202610km  → 10K  (연도 2026 접두사 제거)
-    - 50K50K    → 50K  (중복 토큰 제거)
-    - 36Km      → 36K  (단위 대소문자 통일)
-    - 3km걷기   → 3K, 걷기 (복합 토큰 분리)
-    - 100마일   → 100마일
-    """
+    """거리/종목을 풀/하프/XK/걷기 형태로 정규화."""
     combined = ",".join(str(x) for x in raw) if isinstance(raw, list) else str(raw or "")
 
     seen: set[str] = set()
@@ -132,16 +116,13 @@ def _normalize_distances(raw) -> list[str]:
     for token in _DIST_PATTERN.findall(combined):
         t = token.strip()
 
-        # 1) 단어형 (풀/하프/걷기)
         normalized: Optional[str] = _WORD_TO_NORM.get(t)
 
-        # 2) 마라톤+숫자형: "마라톤10km" → "10K"
         if normalized is None:
             m = re.match(r"^마라톤(\d+(?:\.\d+)?)(km|KM|Km|K|k|m|마일)$", t, re.IGNORECASE)
             if m:
                 normalized = _format_dist_num(m.group(1), m.group(2))
 
-        # 3) 순수 숫자+단위형
         if normalized is None:
             m = re.match(r"^(\d+(?:\.\d+)?)(km|KM|Km|K|k|m|마일)$", t, re.IGNORECASE)
             if m:
@@ -157,7 +138,6 @@ def _normalize_distances(raw) -> list[str]:
 # ── marathongo.co.kr ──────────────────────────────────────────────────────────
 
 def _marathongo_from_next_data(page_props: dict) -> dict:
-    # raceDetail 키 우선 (실제 API 응답 구조)
     r = (
         page_props.get("raceDetail")
         or page_props.get("race")
@@ -165,11 +145,9 @@ def _marathongo_from_next_data(page_props: dict) -> dict:
         or {}
     )
 
-    # raceTypeList: "하프,10km,5km" 형식
     race_type_raw = r.get("raceTypeList") or ""
     distances = _normalize_distances(race_type_raw)
 
-    # intro 텍스트에서 참가비 추출
     intro = r.get("intro") or ""
     fee_m = re.search(r"참가비\s*(\d{1,3}(?:,\d{3})*)\s*원", intro)
     if not fee_m:
@@ -202,16 +180,14 @@ def _marathongo_from_html(soup: BeautifulSoup) -> dict:
     """__NEXT_DATA__ 파싱 실패 시 HTML fallback"""
     text = soup.get_text(" ", strip=True)
 
-    # 대회명: og:title에서 " | 마라톤GO" 제거
     name = None
     og_title = soup.find("meta", property="og:title")
     if og_title:
         raw = str(og_title.get("content") or "").strip()
         name = raw.split("|")[0].strip() or None
 
-    # 날짜: "2026-05-16" 형식 우선, 한국어 형식 fallback
     race_date = None
-    dm = re.search(r"(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}", text)  # "2026-05-16 08:30" 패턴
+    dm = re.search(r"(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}", text)
     if dm:
         race_date = dm.group(1)
     if not race_date:
@@ -219,24 +195,21 @@ def _marathongo_from_html(soup: BeautifulSoup) -> dict:
         if dm2:
             race_date = _parse_date(dm2.group(0))
 
-    # 시작 시간: 날짜 바로 뒤 HH:MM
     time_m = re.search(r"\d{4}-\d{2}-\d{2}\s+(\d{2}:\d{2})", text)
     race_time = time_m.group(1) if time_m else None
 
-    # 거리: "종목/코스/거리" 키워드 주변 100자만 스캔 (전체 텍스트 오탐 방지)
+    # "종목/코스/거리" 키워드 주변 100자만 스캔 (전체 텍스트 오탐 방지)
     dist_ctx = ""
     ctx_m = re.search(r"(?:종목|코스|거리).{0,100}", text)
     if ctx_m:
         dist_ctx = ctx_m.group(0)
     distances = _normalize_distances(dist_ctx) if dist_ctx else []
 
-    # 참가비: "참가비 20,000원" 또는 "20,000원" 패턴
     fee_m = re.search(r"참가비\s*(\d{1,3}(?:,\d{3})*)\s*원", text)
     if not fee_m:
         fee_m = re.search(r"(\d{1,3}(?:,\d{3})+)\s*원", text)
     entry_fee = _parse_won(fee_m.group(1)) if fee_m else None
 
-    # 접수 기간
     reg_m = re.search(
         r"(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})\s*[~～]\s*(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})",
         text,
@@ -276,7 +249,6 @@ def _fetch_marathongo_detail(slug: str, session: requests.Session) -> dict:
 
     race["source_url"] = url
     race["source"] = "marathongo"
-    # isSoldOut/isPaused 플래그가 없으면 날짜 기반 상태로 채움
     if not race.get("status"):
         race["status"] = _compute_status(race)
     elif _compute_status(race) == "종료":
@@ -376,11 +348,9 @@ def _parse_roadrun_detail(html: str) -> dict:
 
     result: dict = {}
 
-    # 대회명 (목록 페이지에서 잘린 이름을 상세 페이지로 교정)
     if raw.get("name"):
         result["name"] = raw["name"]
 
-    # 출발시간: "2026년3월21일 출발시간:오전 09:00"
     dt_raw = raw.get("datetime_raw", "")
     tm = re.search(r"출발시간[:\s]*(오전|오후)\s*(\d{1,2}):(\d{2})", dt_raw)
     if tm:
@@ -391,17 +361,14 @@ def _parse_roadrun_detail(html: str) -> dict:
             h = 0
         result["race_time"] = f"{h:02d}:{minute}"
 
-    # 대회종목 → distances
     dist_raw = raw.get("distances_raw", "")
     if dist_raw:
         result["distances"] = _normalize_distances(dist_raw)
 
-    # 지역 / 장소 / 주최
     for field in ("city", "location", "organizer"):
         if raw.get(field):
             result[field] = raw[field]
 
-    # 접수기간: "2026년1월24일~2026년2월22일"
     rp = raw.get("reg_period", "")
     rm = re.search(
         r"(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)\s*[~～]\s*(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)", rp
@@ -446,7 +413,6 @@ def crawl_roadrun(limit: int = 0) -> list[dict]:
     year_m = re.search(r"(20\d{2})년", page_text)
     current_year = int(year_m.group(1)) if year_m else 2026
 
-    # 전체 tr 스캔 → 첫 번째 셀이 M/D 날짜 패턴인 행만 추출
     seen_urls: set[str] = set()
     races = []
     for row in soup.find_all("tr"):
@@ -477,12 +443,10 @@ def crawl_roadrun(limit: int = 0) -> list[dict]:
             if raw_href and not raw_href.lower().startswith("javascript"):
                 href = raw_href
             else:
-                # onclick 또는 href 내 open_window('win', 'view.php?no=123', ...) 파싱
                 onclick = str(link.get("onclick", "")) or raw_href
                 om = re.search(r"open_window\([^,]+,\s*['\"]([^'\"]+)['\"]", onclick)
                 if om:
                     href = om.group(1)
-        # urljoin으로 상대경로 안전하게 결합 (슬래시 누락 방지)
         source_url = urljoin(url, href) if href else f"{url}?key={race_date}_{name[:20]}"
 
         if source_url in seen_urls:
@@ -507,7 +471,6 @@ def crawl_roadrun(limit: int = 0) -> list[dict]:
     if limit > 0:
         races = races[:limit]
 
-    # 상세 페이지 병렬 수집 (최대 8 workers)
     def enrich(race: dict) -> dict:
         detail = _fetch_roadrun_detail(race["source_url"], session)
         merged = {**race, **detail}
@@ -522,8 +485,62 @@ def crawl_roadrun(limit: int = 0) -> list[dict]:
 
 # ── 통합 ─────────────────────────────────────────────────────────────────────
 
+def _core_name(name: str) -> str:
+    t = name or ""
+    t = re.sub(r"20\d{2}", "", t)
+    t = re.sub(r"제\s*\d+\s*회", "", t)
+    t = re.sub(r"[^가-힣a-zA-Z0-9]", "", t)
+    t = re.sub(r"마라톤|대회|마라|런|RUN|run", "", t, flags=re.IGNORECASE)
+    return t.strip().lower()
+
+
+def _name_similarity(a: str, b: str) -> float:
+    ca, cb = _core_name(a), _core_name(b)
+    if not ca or not cb:
+        return 0.0
+    if ca in cb or cb in ca:
+        return 1.0
+    shorter, longer = (ca, cb) if len(ca) <= len(cb) else (cb, ca)
+    common = sum(1 for c in shorter if c in longer)
+    return common / len(longer)
+
+
+def _merge_race(base: dict, supplement: dict) -> dict:
+    merged = dict(base)
+    for key, val in supplement.items():
+        if key in ("source", "source_url"):
+            continue
+        if merged.get(key) is None and val is not None:
+            merged[key] = val
+    return merged
+
+
+def _dedup_races(marathongo: list[dict], roadrun: list[dict]) -> list[dict]:
+    """날짜 + 대회명 유사도 기반 중복 제거. marathongo 우선, roadrun으로 null 필드 보완."""
+    result = list(marathongo)
+    THRESHOLD = 0.7
+
+    for rr in roadrun:
+        rr_date = rr.get("race_date")
+        matched = None
+        for mg in marathongo:
+            if mg.get("race_date") != rr_date:
+                continue
+            if _name_similarity(mg.get("name", ""), rr.get("name", "")) >= THRESHOLD:
+                matched = mg
+                break
+
+        if matched:
+            idx = result.index(matched)
+            result[idx] = _merge_race(matched, rr)
+            logger.debug(f"중복 병합: {matched.get('name')} ← {rr.get('name')}")
+        else:
+            result.append(rr)
+
+    return result
+
+
 def crawl_all(limit: int = 30) -> list[dict]:
-    races: list[dict] = []
-    races.extend(crawl_marathongo(limit=limit))
-    races.extend(crawl_roadrun(limit=limit))
-    return races
+    mg_races = crawl_marathongo(limit=limit)
+    rr_races = crawl_roadrun(limit=limit)
+    return _dedup_races(mg_races, rr_races)
