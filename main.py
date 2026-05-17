@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from app.core.config import settings
 from app.core.database import public_db, review_db, crew_db
-from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize
+from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize, crypto, participants
 
 app = FastAPI(
     title="CORE API",
@@ -18,6 +18,8 @@ app.include_router(parse_image.router)
 app.include_router(race_info.router)
 app.include_router(summarize.router)
 app.include_router(race_summarize.router)
+app.include_router(crypto.router)
+app.include_router(participants.router)
 
 
 @app.get("/")

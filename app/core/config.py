@@ -12,9 +12,11 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_default_region: str = "ap-northeast-2"
     aws_bucket: str = ""
+    encrypt_key: str = ""
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 settings = Settings()
