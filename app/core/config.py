@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     openai_api_key: str = ""
     app_env: str = "development"
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
+    aws_default_region: str = "ap-northeast-2"
+    aws_bucket: str = ""
 
     class Config:
         env_file = ".env"
