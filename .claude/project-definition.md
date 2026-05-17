@@ -107,9 +107,11 @@ Supabase PostgreSQL
 ```
 1. FastAPI 기본 설치 및 Supabase 연결  ✅
 2. Swagger UI 확인                     ✅
-3. 이미지 파싱 API (Claude Vision)
-4. 날씨 데이터 API (기상청)
-5. 리뷰 요약 API (Claude API)
+3. 이미지 파싱 API (GPT-4o Vision)     ✅
+4. 대회 크롤링 API (marathongo/roadrun) ✅
+5. 리뷰 개별 AI 요약 + 감성분석        ✅
+6. 대회 AI 종합 분석                   ✅
+7. 날씨 데이터 API                     ← 다음
 ```
 
 ---
