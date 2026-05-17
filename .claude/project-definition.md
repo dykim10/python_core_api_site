@@ -120,3 +120,9 @@ Supabase PostgreSQL
 - 운영 환경에서 Swagger 반드시 비활성화 (`APP_ENV=production`)
 - Claude API Key / Supabase Key 는 `.env` 관리 / Git 커밋 금지
 - Apify 비용 모니터링 필수
+
+
+## 대회일정 스크래핑/크롤링 대상
+https://marathongo.co.kr/?raceEnd=%EC%A0%84%EC%B2%B4
+http://www.roadrun.co.kr/schedule/list.php
+
