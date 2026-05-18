@@ -1,6 +1,8 @@
 import json
+import re
 import uuid
 import boto3
+from datetime import date as date_type, datetime
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -22,6 +24,7 @@ PARSE_PROMPT = """이 이미지는 러닝 앱(Nike Run Club, Strava, 가민, 애
 이미지에서 아래 항목을 추출하여 JSON 형식으로만 응답해주세요. 없는 항목은 null로 표기하세요.
 
 {
+  "run_date": "YYYY-MM-DD" (이미지에 표시된 운동 날짜. 연도가 없으면 현재 연도 사용. 없으면 null),
   "distance_km": 숫자 (킬로미터, 소수점 2자리),
   "duration_seconds": 숫자 (총 운동시간, 초 단위 정수),
   "avg_pace_seconds": 숫자 (평균 페이스, 초/km 정수. 예: 5분30초 → 330),
@@ -38,6 +41,7 @@ JSON 외에 다른 텍스트는 절대 포함하지 마세요."""
 
 class ParseImageResponse(BaseModel):
     s3_url: str
+    run_date: Optional[str] = None
     distance_km: Optional[float] = None
     duration_seconds: Optional[int] = None
     avg_pace_seconds: Optional[int] = None
@@ -48,6 +52,24 @@ class ParseImageResponse(BaseModel):
     elevation_m: Optional[float] = None
     has_map: Optional[bool] = None
     raw_parsed: dict = {}
+
+
+def _normalize_run_date(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    current_year = date_type.today().year
+
+    # 4자리 연도가 없으면 당해년도 붙임
+    if not re.search(r'\b\d{4}\b', raw):
+        raw = f"{current_year}-{raw}"
+
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
 
 
 def _upload_to_s3(image_bytes: bytes, content_type: str) -> str:
@@ -97,6 +119,7 @@ async def parse_image(file: UploadFile = File(...)):
 
     return ParseImageResponse(
         s3_url=s3_url,
+        run_date=_normalize_run_date(parsed.get("run_date")),
         distance_km=parsed.get("distance_km"),
         duration_seconds=parsed.get("duration_seconds"),
         avg_pace_seconds=parsed.get("avg_pace_seconds"),
