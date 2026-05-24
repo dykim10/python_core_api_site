@@ -1,3 +1,29 @@
+"""
+이벤트 참가자 일괄 등록 라우터 (app/api/routes/participants.py)
+
+엑셀 파일을 업로드해 이벤트 참가자를 crew.event_participants 테이블에 일괄 저장한다.
+이름 · 이메일 · 휴대폰은 Fernet AES-128 로 암호화해서 저장한다.
+
+POST /api/participants/import
+  요청 : multipart/form-data
+    file     : xlsx 또는 xls 파일
+    event_id : 대상 이벤트 ID (Form 파라미터)
+  응답 : {"imported": N, "failed": N, "errors": ["2행: 이름 누락", ...]}
+
+[엑셀 컬럼 매핑 (COLUMN_MAP)]
+  이름   → name_enc  (암호화 저장)
+  이메일 → email_enc (암호화 저장)
+  휴대폰 → phone_enc (암호화 저장)
+  메모   → memo      (평문 저장)
+
+[처리 흐름]
+  1. 파일 타입 검증 (xlsx / xls 만 허용)
+  2. pandas.read_excel 로 파싱
+  3. 컬럼명 한글 → 영문 rename (COLUMN_MAP)
+  4. 행별로 암호화 후 INSERT
+  5. 이름 누락 행은 건너뜀 + errors 에 기록
+  6. 결과 집계 반환 (imported / failed / errors)
+"""
 import io
 import pandas as pd
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException

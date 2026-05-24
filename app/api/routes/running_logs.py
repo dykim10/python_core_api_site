@@ -1,3 +1,21 @@
+"""
+러닝 기록 라우터 (app/api/routes/running_logs.py)
+
+crew.running_logs 테이블의 기본 CRUD.
+현재는 내부 관리 또는 테스트 용도로만 사용하며,
+실제 러닝 기록 저장은 CREW(Laravel) 에서 Eloquent 로 직접 처리한다.
+
+[엔드포인트]
+  GET    /api/running-logs/user/{user_id}
+    특정 사용자의 기록 목록 (log_date 내림차순, limit 기본 20)
+
+  POST   /api/running-logs/
+    기록 생성 (RunningLogCreate 스키마 검증)
+    Decimal 타입(distance_km, altitude_m)은 float 으로 변환 후 INSERT
+
+  DELETE /api/running-logs/{log_id}
+    기록 삭제, {"deleted": log_id} 반환
+"""
 from fastapi import APIRouter, HTTPException
 from app.core.database import crew_db
 from app.models.schemas import RunningLogCreate

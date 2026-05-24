@@ -1,3 +1,34 @@
+"""
+대회 정보 크롤러 (app/services/race_crawler.py)
+
+marathongo.co.kr 와 roadrun.co.kr 에서 마라톤/러닝 대회 정보를 수집한다.
+race_info.py 라우터에서 호출하며, 수집 결과를 dict 리스트로 반환한다.
+
+[크롤러 구성]
+  crawl_marathongo(limit)
+    - 목록 페이지 HTML 에서 상세 페이지 slug 목록 추출
+    - 상세 페이지의 __NEXT_DATA__ JSON 우선 파싱 (Next.js SSR 구조)
+    - __NEXT_DATA__ 없으면 HTML fallback 파싱 (_marathongo_from_html)
+
+  crawl_roadrun(limit)
+    - 목록 테이블에서 대회 기본 정보 추출
+    - ThreadPoolExecutor(max_workers=8) 로 상세 페이지 병렬 수집
+    - 인코딩 euc-kr, SSL 인증서 무시(verify=False) — 구형 사이트
+
+  crawl_all(limit)
+    - 두 소스를 합친 뒤 _dedup_races 로 중복 제거 후 반환
+
+[중복 제거 전략 — _dedup_races]
+  race_date 가 같은 대회 중 이름 유사도 >= 0.7 이면 동일 대회로 판단.
+  marathongo 를 기준(base)으로, roadrun 으로 null 필드를 보완(supplement).
+  _name_similarity: 연도/회차/마라톤 등 노이즈 제거 후 공통 문자 비율로 계산.
+
+[공통 유틸]
+  _normalize_distances : "풀코스", "42.195km", "10K" 등 → 풀/하프/XK/걷기 통일
+  _compute_status      : race_date / reg_start / reg_end 기준 접수상태 계산
+  _parse_date          : 한국어("2025년 5월 24일") / 구분자 혼용 → "YYYY-MM-DD"
+  _get_next_data       : <script id="__NEXT_DATA__"> 추출 → dict 반환
+"""
 import re
 import json
 import logging

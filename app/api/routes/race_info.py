@@ -1,3 +1,24 @@
+"""
+대회 정보 크롤링 라우터 (app/api/routes/race_info.py)
+
+marathongo.co.kr 와 roadrun.co.kr 에서 대회 정보를 수집해 review.races 테이블에 저장한다.
+같은 날짜에 이름이 유사한 대회는 marathongo 우선, roadrun 으로 null 필드 보완한다.
+
+[엔드포인트]
+  GET /api/race-info
+    source : "marathongo" | "roadrun" | "all" (기본 "all")
+    limit  : 소스별 최대 수집 건수, 0=전체 (최대 200)
+    → 크롤링 후 source_url 기준 upsert (중복 저장 방지)
+    → {"crawled": N, "saved": N, "errors": [...], "data": [...]}
+
+  GET /api/race-info/debug
+    marathongo 목록 + 첫 번째 상세 페이지 구조를 반환한다.
+    크롤러 오동작 시 원인 파악용 진단 엔드포인트.
+
+  GET /api/race-info/debug-roadrun-detail?uid=1234
+    roadrun.co.kr view.php 팝업 페이지 구조를 반환한다.
+    테이블 셀 구조, 링크 목록 등을 확인해 파서 개발에 활용.
+"""
 import re
 import requests
 from bs4 import BeautifulSoup

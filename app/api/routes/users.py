@@ -1,3 +1,23 @@
+"""
+사용자 라우터 (app/api/routes/users.py)
+
+public.users 테이블의 기본 CRUD.
+현재는 내부 관리 또는 테스트 용도로 제한적으로 사용하며,
+실제 회원가입 / 로그인은 CREW / REVIEW(Laravel Breeze) 에서 처리한다.
+
+[엔드포인트]
+  GET  /api/users/{user_id}
+    회원 단건 조회 (id, email, name, nickname, role, is_beta, created_at 만 선택)
+    없으면 HTTP 404
+
+  POST /api/users/
+    회원 생성 (UserCreate 스키마 검증)
+    비밀번호를 SHA-256 으로 해시해서 저장
+
+[주의]
+  이 라우터의 SHA-256 해시는 Laravel Bcrypt 와 호환되지 않는다.
+  실제 로그인 인증은 반드시 Laravel 에서만 처리해야 한다.
+"""
 from fastapi import APIRouter, HTTPException
 from app.core.database import public_db
 from app.models.schemas import UserCreate

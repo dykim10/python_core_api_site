@@ -1,3 +1,30 @@
+"""
+대회 종합 분석 라우터 (app/api/routes/race_summarize.py)
+
+REVIEW(Laravel) 에서 대회 상세 페이지의 AI 종합 분석 기능에서 호출한다.
+여러 개의 후기를 한 번에 받아 GPT-4o-mini 로 대회 전체를 평가한다.
+
+POST /api/races/summarize
+  요청 : {
+    "race_name"  : "대회명",
+    "reviews"    : ["후기1", "후기2", ...],
+    "avg_rating" : 4.2,
+    "total_count": 15
+  }
+  응답 : {
+    "summary"  : "종합 평가 3~5문장",
+    "positives": ["칭찬 포인트1", ...],
+    "negatives": ["아쉬운 포인트1", ...],
+    "keywords" : ["키워드1", ..., "키워드5"]
+  }
+
+[프롬프트 구성]
+  리뷰 목록을 "[리뷰 1] text", "[리뷰 2] text" 형식으로 번호를 붙여 전달.
+  positives / negatives 는 실제 후기에서 언급된 내용만 포함하도록 지시.
+  없는 항목은 빈 배열로 반환하도록 지시.
+
+향후 Claude API 로 전환 예정 (현재 GPT-4o-mini 사용 중).
+"""
 import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel

@@ -1,3 +1,29 @@
+"""
+CORE API — 진입점 (main.py)
+
+FastAPI 애플리케이션을 생성하고 모든 라우터를 등록하는 최상위 파일.
+uvicorn main:app --reload 명령으로 실행한다.
+
+[Swagger / ReDoc]
+  APP_ENV=development 일 때만 /docs, /redoc 활성화
+  운영 환경에서는 docs_url=None 으로 자동 비활성화 (보안)
+
+[등록된 라우터]
+  users         → /api/users
+  races         → /api/races
+  running_logs  → /api/running-logs
+  parse_image   → /api/parse-image
+  race_info     → /api/race-info
+  summarize     → /api/summarize
+  race_summarize→ /api/races/summarize
+  crypto        → /api/crypto
+  participants  → /api/participants
+
+[헬스체크 엔드포인트]
+  GET /          → {"status": "ok", "env": "development|production"}
+  GET /health/db → public / review / crew 스키마 각 1건 조회 확인
+                   실패 시 {"status": "error", "detail": "..."}
+"""
 from fastapi import FastAPI
 from app.core.config import settings
 from app.core.database import public_db, review_db, crew_db

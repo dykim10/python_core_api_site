@@ -1,3 +1,37 @@
+"""
+러닝 이미지 파싱 라우터 (app/api/routes/parse_image.py)
+
+CREW(Laravel) 에서 호출하는 핵심 엔드포인트.
+러닝 앱 스크린샷을 S3 에 저장하고, GPT-4o Vision 으로 수치를 추출해 반환한다.
+
+POST /api/parse-image
+  요청  : multipart/form-data — file (이미지, 최대 10MB)
+  지원  : JPEG / PNG / GIF / WebP
+  응답  : {
+    "s3_url"           : S3 저장 URL,
+    "run_date"         : "YYYY-MM-DD",
+    "distance_km"      : 거리(float),
+    "duration_seconds" : 총 시간(int, 초),
+    "avg_pace_seconds" : 평균 페이스(int, 초/km),
+    "best_pace_seconds": 최고 페이스(int, 초/km),
+    "calories"         : 소모 칼로리(int),
+    "avg_heart_rate"   : 평균 심박수(int, bpm),
+    "is_indoor"        : 실내 여부(bool),
+    "elevation_m"      : 누적 고도(float),
+    "raw_parsed"       : GPT 원본 응답 dict
+  }
+
+[처리 흐름]
+  1. 파일 타입 · 크기(10MB) 검증
+  2. _upload_to_s3 — running-logs/{uuid}.{ext} 경로로 S3 저장
+  3. invoke_with_image — PARSE_PROMPT 로 GPT-4o Vision 파싱
+  4. JSON 파싱 (```json 마크다운 블록 제거 후 json.loads)
+  5. _normalize_run_date — 연도 없는 날짜에 올해 연도 자동 추가
+
+[_normalize_run_date]
+  연도 없는 날짜(예: "05-24") → 현재 연도 자동 붙임
+  -, /, . 구분자 혼용 포맷 → "YYYY-MM-DD" 통일
+"""
 import json
 import re
 import uuid
@@ -58,18 +92,34 @@ def _normalize_run_date(raw: str | None) -> str | None:
     if not raw:
         return None
     raw = str(raw).strip()
-    current_year = date_type.today().year
+    today = date_type.today()
+    current_year = today.year
 
     # 4자리 연도가 없으면 당해년도 붙임
     if not re.search(r'\b\d{4}\b', raw):
         raw = f"{current_year}-{raw}"
 
-    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y-%m-%d"):
+    parsed_date = None
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"):
         try:
-            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+            parsed_date = datetime.strptime(raw, fmt)
+            break
         except ValueError:
             continue
-    return None
+
+    if parsed_date is None:
+        return None
+
+    # 연도가 2년 이상 과거이면 올해로 교정
+    # 이미지에 연도 미표시 → GPT가 잘못된 연도(2020, 2023 등)를 반환하는 환각 방어
+    if parsed_date.year < current_year - 1:
+        parsed_date = parsed_date.replace(year=current_year)
+
+    # 미래 날짜이면 전년도로 교정 (예: 12월 기록을 다음해 1월에 업로드하는 경우 제외한 순수 오류)
+    if parsed_date.date() > today:
+        parsed_date = parsed_date.replace(year=current_year - 1)
+
+    return parsed_date.strftime("%Y-%m-%d")
 
 
 def _upload_to_s3(image_bytes: bytes, content_type: str) -> str:
