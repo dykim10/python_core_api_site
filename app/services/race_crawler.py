@@ -30,6 +30,7 @@ race_info.py 라우터에서 호출하며, 수집 결과를 dict 리스트로 �
   _get_next_data       : <script id="__NEXT_DATA__"> 추출 → dict 반환
 """
 import re
+import time
 import json
 import logging
 import urllib3
@@ -425,35 +426,71 @@ def _fetch_roadrun_detail(url: str, session: requests.Session) -> dict:
         return {}
 
 
-def crawl_roadrun(limit: int = 0) -> list[dict]:
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    url = f"{ROADRUN_BASE}/schedule/list.php"
-    session = requests.Session()
-    session.headers.update(HEADERS)
+def _crawl_roadrun_month(
+    year: int,
+    month: int,
+    session: requests.Session,
+    seen_urls: set[str],
+) -> list[dict]:
+    """roadrun.co.kr 특정 연/월 목록 페이지 파싱.
+
+    날짜 셀 형식:
+      과거연도(2025~): "20255/3(토)"  → 연도가 MM/DD 앞에 붙어 있음
+      현재연도(2026):  "5/2(토)"      → 연도 없이 MM/DD만 표시
+
+    HTML 주석 '<!--리스트 시작-->'은 대회 목록 <table> 내부,
+    헤더 행(날짜/대회명/장소/주최) 바로 다음에 위치한다.
+    find_all_next("tr")로 헤더·메타 행을 건너뛰고 순수 대회 행만 파싱한다.
+    seen_urls 는 호출자가 관리하는 공유 집합 — 월 간 중복 URL 제거에 사용.
+    """
+    list_url = f"{ROADRUN_BASE}/schedule/list.php"
+    params = {"syear_key": year, "smonth_key": month}
+
     try:
-        resp = session.get(url, verify=False, timeout=15)
+        resp = session.get(list_url, params=params, verify=False, timeout=15)
         resp.encoding = "euc-kr"
         resp.raise_for_status()
     except Exception as e:
-        logger.error(f"roadrun fetch 실패: {e}")
+        logger.warning(f"roadrun {year}년 {month}월 fetch 실패: {e}")
         return []
 
     soup = BeautifulSoup(resp.text, "html.parser")
+    races: list[dict] = []
 
-    page_text = soup.get_text()
-    year_m = re.search(r"(20\d{2})년", page_text)
-    current_year = int(year_m.group(1)) if year_m else 2026
+    # <!--리스트 시작-->은 대회 목록 <table> 내부 헤더 행 바로 다음에 위치.
+    # find_all_next("tr")로 순수 대회 데이터 행(헤더·메타 행 제외)만 가져온다.
+    list_start = soup.find(
+        string=lambda t: isinstance(t, Comment) and "리스트 시작" in t
+    )
+    if list_start:
+        tr_source = list_start.find_all_next("tr")
+    else:
+        # 주석이 없으면 전체 tr 대상 (fallback)
+        logger.debug(f"roadrun {year}년 {month}월: 리스트 시작 주석 미발견, 전체 tr 파싱")
+        tr_source = soup.find_all("tr")
 
-    seen_urls: set[str] = set()
-    races = []
-    for row in soup.find_all("tr"):
+    for row in tr_source:
         cells = row.find_all("td")
         if len(cells) < 4:
             continue
 
         date_text = cells[0].get_text(strip=True)
-        dm = re.match(r"^(\d{1,2})/(\d{1,2})", date_text)
-        if not dm:
+        # 날짜 셀 형식이 연도에 따라 다름:
+        #   과거연도(2025~): "20255/3(토)"  → 연도가 MM/DD 앞에 붙어 있음
+        #   현재연도(2026):  "5/2(토)"      → 연도 없이 MM/DD만 표시
+        dm_full  = re.match(r"^(20\d{2})(\d{1,2})/(\d{1,2})", date_text)
+        dm_short = re.match(r"^(\d{1,2})/(\d{1,2})", date_text)
+
+        if dm_full:
+            year_val  = int(dm_full.group(1))
+            month_val = int(dm_full.group(2))
+            day_val   = int(dm_full.group(3))
+        elif dm_short:
+            # 연도 없는 형식 — 요청 파라미터의 year 사용
+            year_val  = year
+            month_val = int(dm_short.group(1))
+            day_val   = int(dm_short.group(2))
+        else:
             continue
 
         name_raw  = cells[1].get_text(strip=True)
@@ -463,7 +500,7 @@ def crawl_roadrun(limit: int = 0) -> list[dict]:
         if not name_raw:
             continue
 
-        race_date = f"{current_year}-{int(dm.group(1)):02d}-{int(dm.group(2)):02d}"
+        race_date = f"{year_val}-{month_val:02d}-{day_val:02d}"
         name, distances = _roadrun_split_name_dist(name_raw)
         organizer = re.sub(r"☎.*$", "", org_phone).strip()
 
@@ -478,8 +515,13 @@ def crawl_roadrun(limit: int = 0) -> list[dict]:
                 om = re.search(r"open_window\([^,]+,\s*['\"]([^'\"]+)['\"]", onclick)
                 if om:
                     href = om.group(1)
-        source_url = urljoin(url, href) if href else f"{url}?key={race_date}_{name[:20]}"
+        source_url = (
+            urljoin(list_url, href)
+            if href
+            else f"{list_url}?key={race_date}_{name[:20]}"
+        )
 
+        # 같은 URL이 여러 월 페이지에 중복 등장할 수 있으므로 공유 집합으로 필터
         if source_url in seen_urls:
             continue
         seen_urls.add(source_url)
@@ -495,12 +537,45 @@ def crawl_roadrun(limit: int = 0) -> list[dict]:
                 "source_url": source_url,
             })
 
-    if not races:
-        logger.warning("roadrun: 레이스 데이터 없음")
+    logger.debug(f"roadrun {year}년 {month}월: {len(races)}건")
+    return races
+
+
+def crawl_roadrun(limit: int = 0) -> list[dict]:
+    """2025년 1월 ~ 2026년 12월을 월별로 순회하며 대회 목록을 수집한다.
+
+    - syear_key / smonth_key 파라미터로 연월 지정 (총 24회 요청)
+    - 월별 요청 사이 CRAWL_DELAY 초 대기 — 대상 서버 차단 방지
+    - seen_urls 공유 집합으로 월 간 중복 URL 제거
+    - 목록 수집 완료 후 ThreadPoolExecutor(max_workers=8) 로 상세 병렬 수집
+    """
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    CRAWL_YEARS  = [2025, 2026]
+    CRAWL_MONTHS = range(1, 13)
+    CRAWL_DELAY  = 10  # 월별 요청 간 대기 시간 (초)
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    seen_urls: set[str] = set()
+    all_races: list[dict] = []
+
+    for year in CRAWL_YEARS:
+        for i, month in enumerate(CRAWL_MONTHS):
+            if i > 0:
+                # 첫 번째 요청은 딜레이 없음, 이후 요청마다 대기
+                time.sleep(CRAWL_DELAY)
+            races = _crawl_roadrun_month(year, month, session, seen_urls)
+            all_races.extend(races)
+            logger.info(f"roadrun {year}년 {month:2d}월: {len(races)}건 수집")
+
+    if not all_races:
+        logger.warning("roadrun: 수집된 대회 없음 (2025~2026)")
         return []
 
     if limit > 0:
-        races = races[:limit]
+        all_races = all_races[:limit]
 
     def enrich(race: dict) -> dict:
         detail = _fetch_roadrun_detail(race["source_url"], session)
@@ -509,8 +584,9 @@ def crawl_roadrun(limit: int = 0) -> list[dict]:
         return merged
 
     with ThreadPoolExecutor(max_workers=8) as executor:
-        enriched = list(executor.map(enrich, races))
+        enriched = list(executor.map(enrich, all_races))
 
+    logger.info(f"roadrun 총 수집: {len(enriched)}건")
     return enriched
 
 
