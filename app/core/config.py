@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     aws_default_region: str = "ap-northeast-2"
     aws_bucket: str = ""
     encrypt_key: str = ""
+    solapi_api_key: str = ""
+    solapi_api_secret: str = ""
+    sms_sender: str = ""
 
     class Config:
         env_file = ".env"
