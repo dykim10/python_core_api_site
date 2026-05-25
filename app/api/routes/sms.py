@@ -54,7 +54,7 @@ async def send_sms(body: SmsSendRequest):
 
     try:
         resp = requests.post(
-            "https://api.solapi.com/messages/v4/send",
+            "https://api.solapi.com/messages/v4/send-many",
             json={"messages": messages},
             headers={
                 "Content-Type": "application/json",
