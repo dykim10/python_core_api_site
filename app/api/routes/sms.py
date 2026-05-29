@@ -89,6 +89,38 @@ async def send_sms(body: SmsSendRequest):
         }
 
 
+@router.get("/senders")
+async def get_senders():
+    """솔라피에 등록된 발신번호 목록 조회"""
+    api_key    = settings.solapi_api_key
+    api_secret = settings.solapi_api_secret
+
+    if not api_key or not api_secret:
+        return {"senders": [], "error": "Solapi 인증 정보가 설정되지 않았습니다."}
+
+    try:
+        resp = requests.get(
+            "https://api.solapi.com/senders/v1/list",
+            headers={"Authorization": _solapi_auth_header(api_key, api_secret)},
+            timeout=10,
+        )
+        data = resp.json()
+
+        if resp.status_code == 200:
+            senders = [
+                item.get("phoneNumber") or item.get("phone_number") or ""
+                for item in data.get("senderList", data.get("result", []))
+                if (item.get("phoneNumber") or item.get("phone_number"))
+                   and item.get("approvalStatus", item.get("status", "")) in ("APPROVED", "approved", "")
+            ]
+            return {"senders": senders}
+        else:
+            return {"senders": [], "error": data.get("errorMessage", resp.text)}
+
+    except Exception as e:
+        return {"senders": [], "error": str(e)}
+
+
 @router.get("/status/{group_id}")
 async def get_sms_status(group_id: str):
     """발송 그룹의 현재 수신 결과 집계 조회 (수동 갱신용)"""
