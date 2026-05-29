@@ -87,3 +87,36 @@ async def send_sms(body: SmsSendRequest):
             "fail_count":    len(body.phones),
             "error":         str(e),
         }
+
+
+@router.get("/status/{group_id}")
+async def get_sms_status(group_id: str):
+    """발송 그룹의 현재 수신 결과 집계 조회 (수동 갱신용)"""
+    api_key    = settings.solapi_api_key
+    api_secret = settings.solapi_api_secret
+
+    if not api_key or not api_secret:
+        return {"error": "Solapi 인증 정보가 설정되지 않았습니다."}
+
+    try:
+        resp = requests.get(
+            f"https://api.solapi.com/messages/v4/groups/{group_id}",
+            headers={"Authorization": _solapi_auth_header(api_key, api_secret)},
+            timeout=10,
+        )
+        data = resp.json()
+
+        if resp.status_code == 200:
+            count = data.get("count", {})
+            return {
+                "group_id": group_id,
+                "total":    count.get("total", 0),
+                "success":  count.get("success", 0),
+                "error":    count.get("error", 0),
+                "waiting":  count.get("waiting", 0),
+            }
+        else:
+            return {"error": data.get("errorMessage", resp.text)}
+
+    except Exception as e:
+        return {"error": str(e)}
