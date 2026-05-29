@@ -65,12 +65,11 @@ async def send_sms(body: SmsSendRequest):
         data = resp.json()
 
         if resp.status_code == 200:
-            success_count = data.get("groupInfo", {}).get("count", {}).get("success", 0)
-            fail_count    = data.get("groupInfo", {}).get("count", {}).get("error", 0)
+            count = data.get("count", {})
             return {
-                "success_count": success_count,
-                "fail_count":    fail_count,
-                "group_id":      data.get("groupInfo", {}).get("groupId"),
+                "success_count": count.get("sentSuccess", 0),
+                "fail_count":    count.get("sentFailed", 0),
+                "group_id":      data.get("groupId"),
                 "raw":           data,
             }
         else:
