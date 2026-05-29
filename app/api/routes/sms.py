@@ -100,7 +100,7 @@ async def get_senders():
 
     try:
         resp = requests.get(
-            "https://api.solapi.com/senders/v1/list",
+            "https://api.solapi.com/senderid/v1/numbers",
             headers={"Authorization": _solapi_auth_header(api_key, api_secret)},
             timeout=10,
         )
@@ -108,10 +108,9 @@ async def get_senders():
 
         if resp.status_code == 200:
             senders = [
-                item.get("phoneNumber") or item.get("phone_number") or ""
-                for item in data.get("senderList", data.get("result", []))
-                if (item.get("phoneNumber") or item.get("phone_number"))
-                   and item.get("approvalStatus", item.get("status", "")) in ("APPROVED", "approved", "")
+                item["phoneNumber"]
+                for item in data.get("senderIds", [])
+                if item.get("phoneNumber") and item.get("status") == "ACTIVE"
             ]
             return {"senders": senders}
         else:
