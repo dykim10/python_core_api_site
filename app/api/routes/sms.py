@@ -141,9 +141,9 @@ async def get_sms_status(group_id: str):
             return {
                 "group_id": group_id,
                 "total":    count.get("total", 0),
-                "success":  count.get("success", 0),
-                "error":    count.get("error", 0),
-                "waiting":  count.get("waiting", 0),
+                "success":  count.get("sentSuccess", 0),
+                "error":    count.get("sentFailed", 0),
+                "waiting":  count.get("sentPending", 0),
             }
         else:
             return {"error": data.get("errorMessage", resp.text)}
