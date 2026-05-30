@@ -140,20 +140,23 @@ async def get_sms_messages(group_id: str, limit: int = 100):
         if resp.status_code != 200:
             return {"error": data.get("errorMessage", resp.text)}
 
-        messages = data.get("fileList", [])
+        # messageList는 {messageId: {...}} 딕셔너리 구조
+        message_dict = data.get("messageList", {})
+        messages = list(message_dict.values())
         return {
             "group_id": group_id,
             "total":    len(messages),
             "messages": [
                 {
-                    "message_id":   m.get("messageId"),
-                    "from":         m.get("from"),
-                    "to":           m.get("to"),
-                    "status_code":  m.get("statusCode"),
-                    "status_msg":   m.get("statusMessage"),
-                    "type":         m.get("type"),
-                    "date_sent":    m.get("dateProcessed"),
-                    "date_received":m.get("dateReceived"),
+                    "message_id":    m.get("messageId"),
+                    "from":          m.get("from"),
+                    "to":            m.get("to"),
+                    "text":          m.get("text"),
+                    "status_code":   m.get("statusCode"),
+                    "status":        m.get("status"),
+                    "type":          m.get("type"),
+                    "date_created":  m.get("dateCreated"),
+                    "date_received": m.get("dateReceived"),
                 }
                 for m in messages
             ],
