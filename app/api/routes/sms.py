@@ -119,6 +119,50 @@ async def get_senders():
         return {"senders": [], "error": str(e)}
 
 
+@router.get("/messages/{group_id}")
+async def get_sms_messages(group_id: str, limit: int = 100):
+    """발송 그룹의 개별 메시지 목록 조회 (발신번호 / 수신번호 / 상태 포함)"""
+    api_key    = settings.solapi_api_key
+    api_secret = settings.solapi_api_secret
+
+    if not api_key or not api_secret:
+        return {"error": "Solapi 인증 정보가 설정되지 않았습니다."}
+
+    try:
+        resp = requests.get(
+            f"https://api.solapi.com/messages/v4/groups/{group_id}/messages",
+            params={"limit": limit},
+            headers={"Authorization": _solapi_auth_header(api_key, api_secret)},
+            timeout=15,
+        )
+        data = resp.json()
+
+        if resp.status_code != 200:
+            return {"error": data.get("errorMessage", resp.text)}
+
+        messages = data.get("fileList", [])
+        return {
+            "group_id": group_id,
+            "total":    len(messages),
+            "messages": [
+                {
+                    "message_id":   m.get("messageId"),
+                    "from":         m.get("from"),
+                    "to":           m.get("to"),
+                    "status_code":  m.get("statusCode"),
+                    "status_msg":   m.get("statusMessage"),
+                    "type":         m.get("type"),
+                    "date_sent":    m.get("dateProcessed"),
+                    "date_received":m.get("dateReceived"),
+                }
+                for m in messages
+            ],
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @router.get("/status/{group_id}")
 async def get_sms_status(group_id: str):
     """발송 그룹의 현재 수신 결과 집계 조회 (수동 갱신용)"""
