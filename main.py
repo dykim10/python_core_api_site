@@ -20,6 +20,7 @@ uvicorn main:app --reload 명령으로 실행한다.
   participants  → /api/participants
   sms           → /api/sms
   s3            → /api/s3
+  apify         → /api/apify/youtube, /api/instagram/posts, /api/instagram/fetch
 
 [헬스체크 엔드포인트]
   GET /          → {"status": "ok", "env": "development|production"}
@@ -29,7 +30,7 @@ uvicorn main:app --reload 명령으로 실행한다.
 from fastapi import FastAPI
 from app.core.config import settings
 from app.core.database import public_db, review_db, crew_db
-from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize, crypto, participants, sms, s3
+from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize, crypto, participants, sms, s3, apify
 
 app = FastAPI(
     title="CORE API",
@@ -50,6 +51,7 @@ app.include_router(crypto.router)
 app.include_router(participants.router)
 app.include_router(sms.router)
 app.include_router(s3.router)
+app.include_router(apify.router)
 
 
 @app.get("/")

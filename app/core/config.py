@@ -16,6 +16,7 @@ pydantic-settings 의 BaseSettings 를 사용해 .env 파일과 OS 환경 변수
   AWS_BUCKET                            : 러닝 이미지 저장 버킷 이름
   ENCRYPT_KEY                           : Fernet AES-128 암호화 키 (개인정보 보호)
   APP_ENV                               : development / production — Swagger UI 활성화 제어
+  APIFY_API_KEY                         : Apify REST API 키 (YouTube / Instagram 크롤링)
 
 extra = "ignore" 로 .env 에 선언되지 않은 키가 있어도 오류 없이 무시한다.
 """
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
     solapi_api_key: str = ""
     solapi_api_secret: str = ""
     sms_sender: str = ""
+    apify_api_key: str = ""
 
     class Config:
         env_file = ".env"
