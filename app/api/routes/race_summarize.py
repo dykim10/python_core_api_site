@@ -2,7 +2,7 @@
 대회 종합 분석 라우터 (app/api/routes/race_summarize.py)
 
 REVIEW(Laravel) 에서 대회 상세 페이지의 AI 종합 분석 기능에서 호출한다.
-여러 개의 후기를 한 번에 받아 GPT-4o-mini 로 대회 전체를 평가한다.
+여러 개의 후기를 한 번에 받아 claude-opus-4-8 로 대회 전체를 평가한다.
 
 POST /api/races/summarize
   요청 : {
@@ -22,13 +22,11 @@ POST /api/races/summarize
   리뷰 목록을 "[리뷰 1] text", "[리뷰 2] text" 형식으로 번호를 붙여 전달.
   positives / negatives 는 실제 후기에서 언급된 내용만 포함하도록 지시.
   없는 항목은 빈 배열로 반환하도록 지시.
-
-향후 Claude API 로 전환 예정 (현재 GPT-4o-mini 사용 중).
 """
 import json
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from openai import OpenAI
+import anthropic
 from app.core.config import settings
 
 router = APIRouter(prefix="/api/races", tags=["race-summarize"])
@@ -53,7 +51,7 @@ def summarize_race(req: RaceSummarizeRequest):
     if not req.reviews:
         raise HTTPException(status_code=422, detail="리뷰가 없습니다.")
 
-    client = OpenAI(api_key=settings.openai_api_key)
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     reviews_text = "\n\n".join(
         [f"[리뷰 {i+1}] {r}" for i, r in enumerate(req.reviews)]
@@ -77,12 +75,12 @@ def summarize_race(req: RaceSummarizeRequest):
 positives/negatives는 실제 후기에 언급된 내용만 포함하고, 없으면 빈 배열로 반환하세요."""
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
+        response = client.messages.create(
+            model="claude-opus-4-8",
             max_tokens=600,
+            messages=[{"role": "user", "content": prompt}],
         )
-        raw = response.choices[0].message.content.strip()
+        raw = response.content[0].text.strip()
         cleaned = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(cleaned)
 
