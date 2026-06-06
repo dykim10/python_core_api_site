@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     sms_sender: str = ""
     apify_api_key: str = ""
 
+    # 백업 설정
+    backup_api_key: str = ""         # POST /api/backup/run 호출 시 X-Backup-Api-Key 헤더
+    backup_retention_days: int = 7   # S3 보관 일수
+
     class Config:
         env_file = ".env"
         extra = "ignore"
