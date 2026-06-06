@@ -72,6 +72,7 @@ def _upload_webp(webp_bytes: bytes, folder: str) -> str:
         Key=key,
         Body=webp_bytes,
         ContentType="image/webp",
+        ACL="public-read",
     )
     return f"https://{settings.aws_bucket}.s3.{settings.aws_default_region}.amazonaws.com/{key}"
 

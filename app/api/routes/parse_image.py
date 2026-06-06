@@ -137,6 +137,7 @@ def _upload_to_s3(image_bytes: bytes, content_type: str) -> str:
         Key=key,
         Body=image_bytes,
         ContentType=content_type,
+        ACL="public-read",
     )
     return f"https://{settings.aws_bucket}.s3.{settings.aws_default_region}.amazonaws.com/{key}"
 
