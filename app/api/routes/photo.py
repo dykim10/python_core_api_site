@@ -7,15 +7,17 @@ Pillow로 리사이즈 + WebP 변환 후 S3에 저장하고 URL을 반환한다.
 엔드포인트:
   POST /api/photo/resize-webp
     - 원본 이미지 → max 800×800 비율 유지 리사이즈 → WebP 변환 → S3 저장
-    - 저장 경로: photo-galleries/{YYYY}/{MM}/{uuid}_thumb.webp
+    - 저장 경로: {folder}/{uuid}_thumb.webp  (folder 기본값: photo-galleries/{YYYY}/{MM})
     - 응답: { "thumbnail_url": str, "width": int, "height": int }
+    - folder 파라미터로 S3 저장 경로 prefix 지정 가능 (예: avatars/42)
 """
 import io
 import uuid
 import boto3
 from datetime import datetime
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 try:
     from PIL import Image
     _PIL_AVAILABLE = True
@@ -55,10 +57,9 @@ def _convert_to_webp(image_bytes: bytes) -> tuple[bytes, int, int]:
         return buf.getvalue(), img.width, img.height
 
 
-def _upload_thumbnail(webp_bytes: bytes) -> str:
+def _upload_webp(webp_bytes: bytes, folder: str) -> str:
     """변환된 WebP 바이트를 S3에 저장하고 URL을 반환한다."""
-    now  = datetime.now()
-    key  = f"photo-galleries/{now.year}/{now.month:02d}/{uuid.uuid4().hex}_thumb.webp"
+    key = f"{folder.strip('/')}/{uuid.uuid4().hex}.webp"
 
     s3 = boto3.client(
         "s3",
@@ -76,7 +77,10 @@ def _upload_thumbnail(webp_bytes: bytes) -> str:
 
 
 @router.post("/resize-webp", response_model=ResizeWebpResponse)
-async def resize_to_webp(file: UploadFile = File(..., description="변환할 원본 이미지")):
+async def resize_to_webp(
+    file: UploadFile = File(..., description="변환할 원본 이미지"),
+    folder: Optional[str] = Form(None, description="S3 저장 경로 prefix (기본: photo-galleries/YYYY/MM)"),
+):
     """이미지 리사이즈 + WebP 변환 → S3 저장 → thumbnail_url 반환"""
     if not _PIL_AVAILABLE:
         raise HTTPException(status_code=503, detail="Pillow 미설치 — pip install Pillow 후 재시작하세요.")
@@ -88,13 +92,18 @@ async def resize_to_webp(file: UploadFile = File(..., description="변환할 원
     if len(image_bytes) > MAX_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="이미지 크기는 10MB 이하여야 합니다.")
 
+    # folder 미지정 시 기본 경로 사용
+    if not folder:
+        now    = datetime.now()
+        folder = f"photo-galleries/{now.year}/{now.month:02d}"
+
     try:
         webp_bytes, width, height = _convert_to_webp(image_bytes)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"이미지 변환 실패: {str(e)}")
 
     try:
-        thumbnail_url = _upload_thumbnail(webp_bytes)
+        thumbnail_url = _upload_webp(webp_bytes, folder)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"S3 업로드 실패: {str(e)}")
 
