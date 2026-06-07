@@ -73,7 +73,9 @@ def _upload_webp(webp_bytes: bytes, folder: str) -> str:
         Body=webp_bytes,
         ContentType="image/webp",
     )
-    return f"https://{settings.aws_bucket}.s3.{settings.aws_default_region}.amazonaws.com/{key}"
+    base = settings.aws_url.rstrip('/') if settings.aws_url else \
+           f"https://{settings.aws_bucket}.s3.{settings.aws_default_region}.amazonaws.com"
+    return f"{base}/{key}"
 
 
 @router.post("/resize-webp", response_model=ResizeWebpResponse)

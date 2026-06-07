@@ -138,7 +138,9 @@ def _upload_to_s3(image_bytes: bytes, content_type: str) -> str:
         Body=image_bytes,
         ContentType=content_type,
     )
-    return f"https://{settings.aws_bucket}.s3.{settings.aws_default_region}.amazonaws.com/{key}"
+    base = settings.aws_url.rstrip('/') if settings.aws_url else \
+           f"https://{settings.aws_bucket}.s3.{settings.aws_default_region}.amazonaws.com"
+    return f"{base}/{key}"
 
 
 @router.post("/parse-image", response_model=ParseImageResponse)

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
     aws_default_region: str = "ap-northeast-2"
     aws_bucket: str = ""
+    aws_url: str = ""  # CloudFront URL (예: https://cdn.pac-run.com)
     encrypt_key: str = ""
     solapi_api_key: str = ""
     solapi_api_secret: str = ""
