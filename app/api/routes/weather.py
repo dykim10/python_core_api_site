@@ -120,7 +120,7 @@ def save_race_weather(
       3. Claude AI 추론
 
     관측 시각 기본값 (hour 미지정 시):
-      서울(stn=108) → 07:30 (KMA ASOS 정시 반올림 → 07:00)
+      서울(stn=108) → 07:00
       그 외 지역    → 08:00
     """
     db = review_db(live=live)
@@ -149,7 +149,7 @@ def save_race_weather(
     if hour is not None:
         obs_hour, obs_min = hour, 0
     elif stn_id == 108:
-        obs_hour, obs_min = 7, 0   # 서울 대회 기준 07:30 → ASOS 정시 07:00
+        obs_hour, obs_min = 7, 0   # 서울 대회 기본 07:00
     else:
         obs_hour, obs_min = 8, 0   # 지방 대회 기본 08:00
 
