@@ -24,26 +24,39 @@ from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
+    # ── 로컬(테스트) Supabase ──────────────────────────────────────────────────
     supabase_url: str
     supabase_key: str
     supabase_service_role_key: str = ""
+
+    # ── 실서버(LIVE) Supabase ─────────────────────────────────────────────────
+    supabase_live_url: str = ""
+    supabase_live_service_role_key: str = ""
+
+    # ── AI ───────────────────────────────────────────────────────────────────
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+
+    # ── 기상청 API Hub ────────────────────────────────────────────────────────
+    kma_api_key: str = ""
+    kma_api_base: str = "https://apihub.kma.go.kr/api/typ01/url"
+
+    # ── AWS ──────────────────────────────────────────────────────────────────
     app_env: str = "development"
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
     aws_default_region: str = "ap-northeast-2"
     aws_bucket: str = ""
-    aws_url: str = ""  # CloudFront URL (예: https://cdn.pac-run.com)
+    aws_url: str = ""  # CloudFront URL
+
+    # ── 기타 ─────────────────────────────────────────────────────────────────
     encrypt_key: str = ""
     solapi_api_key: str = ""
     solapi_api_secret: str = ""
     sms_sender: str = ""
     apify_api_key: str = ""
-
-    # 백업 설정
-    backup_api_key: str = ""         # POST /api/backup/run 호출 시 X-Backup-Api-Key 헤더
-    backup_retention_days: int = 7   # S3 보관 일수
+    backup_api_key: str = ""
+    backup_retention_days: int = 7
 
     class Config:
         env_file = ".env"

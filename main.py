@@ -33,7 +33,7 @@ from fastapi import FastAPI
 
 from app.core.config import settings
 from app.core.database import public_db, review_db, crew_db
-from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize, crypto, participants, sms, s3, apify, photo, backup
+from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize, crypto, participants, sms, s3, apify, photo, backup, weather
 
 try:
     from app.core import scheduler as sched
@@ -74,6 +74,7 @@ app.include_router(s3.router)
 app.include_router(apify.router)
 app.include_router(photo.router)
 app.include_router(backup.router)
+app.include_router(weather.router)
 
 
 @app.get("/")
