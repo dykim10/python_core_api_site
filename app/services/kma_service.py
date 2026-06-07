@@ -2,9 +2,10 @@
 기상청 API Hub 서비스 (app/services/kma_service.py)
 
 [제공 기능]
-  fetch_stations()            : stn_inf.php → 전국 지상 관측소 목록 (list[dict])
-  upsert_stations(live)       : weather_stations 테이블 upsert (stn_id 기준)
-  fetch_observation(stn, tm)  : kma_sfctm2.php → 특정 지점·시각 기상 관측값 (dict)
+  fetch_stations()                    : stn_inf.php → 전국 지상 관측소 목록 (list[dict])
+  upsert_stations(live)               : weather_stations 테이블 upsert (stn_id 기준)
+  fetch_observation(stn, tm)          : kma_sfctm2.php → 특정 지점·시각 기상 관측값 (dict)
+  infer_station_with_claude(loc,city) : Claude AI 로 장소명 → 기상청 지점코드 추론
 
 [KMA 응답 형식]
   stn_inf.php     : 텍스트 (#START7777 ~ #7777END), 직접 파싱
@@ -15,10 +16,11 @@
   - 원본 raw_data JSONB 보존
   - fetched_at TIMESTAMPTZ 필수 기록
 """
-import re
+import json
 from datetime import datetime, timezone
 from typing import Optional
 
+import anthropic
 import requests
 
 from app.core.config import settings
@@ -193,3 +195,77 @@ _WC_MAP = {
 
 def _wc_to_str(code) -> Optional[str]:
     return _WC_MAP.get(str(code)) if code is not None else None
+
+
+# ── Claude AI 장소 → 지점코드 추론 ────────────────────────────────────────────
+
+# 전국 주요 지점 목록 (추론 힌트용)
+_STN_LIST_HINT = """
+108=서울/반포/여의도/잠실/뚝섬/강남/마포/홍대/신촌/연세/광화문/이태원/한강
+112=인천/부천/인천공항
+119=수원/군포/안양/의왕/화성/평택/오산
+98=의정부/동두천/고양/파주/양주
+202=양평/가평/이천
+101=춘천/홍천
+105=강릉/동해/삼척
+90=속초/양양
+114=원주
+133=대전/세종/천안/공주
+131=청주/충주/음성
+146=전주/익산/군산
+156=광주/나주/목포
+168=여수/순천/광양
+143=대구/경산/영천
+159=부산/김해/양산
+155=창원/마산/진해
+152=울산
+136=경주/포항
+184=제주
+"""
+
+
+def infer_station_with_claude(location: str, city: str = "") -> Optional[int]:
+    """
+    Claude AI 를 사용해 장소명 / 도시명 → 가장 가까운 KMA 지점코드 추론.
+
+    location : 장소 텍스트 (예: "여의도공원", "이순신로")
+    city     : 도시 텍스트 (예: "서울", "인천") — 없으면 빈 문자열
+
+    반환: int(지점코드) or None(추론 실패)
+    """
+    if not settings.anthropic_api_key:
+        return None
+
+    prompt = f"""아래 한국 마라톤/러닝 대회 장소 정보를 보고, 가장 적합한 기상청 관측 지점코드를 선택해주세요.
+
+장소명: {location or "(없음)"}
+도시/시·군·구: {city or "(없음)"}
+
+기상청 지점 참고표:
+{_STN_LIST_HINT.strip()}
+
+규칙:
+1. 장소명과 도시 정보를 종합해 가장 가까운 지점코드를 선택하세요.
+2. 확실하지 않으면 서울(108)을 기본값으로 사용하세요.
+3. JSON 만 반환하세요. 설명 없음.
+
+반환 형식: {{"stn_id": 108, "region": "서울", "confidence": "high"}}"""
+
+    try:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        resp = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=128,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        # JSON 부분만 추출
+        start = text.find("{")
+        end   = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            data = json.loads(text[start:end])
+            return int(data.get("stn_id", 108))
+    except Exception:
+        pass
+
+    return None
