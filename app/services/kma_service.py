@@ -8,8 +8,8 @@
   infer_station_with_claude(loc,city) : Claude AI 로 장소명 → 기상청 지점코드 추론
 
 [KMA 응답 형식]
-  stn_inf.php     : 텍스트 (#START7777 ~ #7777END), 직접 파싱
-  kma_sfctm2.php  : disp=1 → JSON 응답
+  stn_inf.php     : EUC-KR 텍스트 (#START7777 ~ #7777END), 직접 파싱
+  kma_sfctm2.php  : EUC-KR 텍스트 (JSON 미지원, /api/typ01/url/ 레거시 포맷)
 
 [외부 API 수신 규칙]
   - 수신은 JSON 우선, 텍스트 응답은 파싱 후 dict 변환
@@ -131,10 +131,16 @@ def upsert_stations(stations: list[dict], live: bool = False) -> dict:
 
 def fetch_observation(stn_id: int, tm: str) -> Optional[dict]:
     """
-    ASOS 지상 관측 단건 조회.
+    ASOS 지상 관측 단건 조회 (kma_sfctm2.php).
 
     stn_id : 지점코드 (예: 108)
     tm     : 관측 시각 YYYYMMDDHHmm (예: "202606071200")
+
+    응답 포맷: #START7777 ~ #7777END 텍스트 (EUC-KR), 공백 구분 컬럼
+    컬럼 순서:
+      [0]=datetime [1]=STN [2]=WD(16방위) [3]=WS(m/s)
+      [7]=PA(기압) [8]=PS [11]=TA(기온°C) [12]=TD(이슬점)
+      [13]=HM(습도%) [14]=PV [15]=RN(강수mm) [22]=WC(날씨코드)
 
     반환: {temperature, humidity, wind_speed, wind_direction,
            precipitation, weather_condition, stn_id, tm, raw_data, fetched_at}
@@ -146,42 +152,67 @@ def fetch_observation(stn_id: int, tm: str) -> Optional[dict]:
             "authKey": settings.kma_api_key,
             "tm":      tm,
             "stn":     stn_id,
-            "disp":    "1",   # JSON 응답 강제
+            "disp":    "1",
         },
         timeout=15,
     )
     resp.raise_for_status()
 
-    raw = resp.json()
-    rows = raw.get("response", {}).get("body", {}).get("items", {}).get("item", [])
-    if not rows:
-        # 일부 API 응답은 최상위 바로 list
-        rows = raw if isinstance(raw, list) else []
+    text = resp.content.decode("euc-kr", errors="replace")
+    return _parse_obs_text(text, stn_id, tm)
 
-    if not rows:
-        return None
 
-    item     = rows[0] if isinstance(rows, list) else rows
-    fetched  = datetime.now(timezone.utc).isoformat()
+def _parse_obs_text(text: str, stn_id: int, tm: str) -> Optional[dict]:
+    """#START7777 텍스트에서 관측값 파싱."""
+    fetched = datetime.now(timezone.utc).isoformat()
 
-    return {
-        "stn_id":            stn_id,
-        "tm":                tm,
-        "temperature":       _safe_float(item.get("ta")),
-        "humidity":          _safe_float(item.get("hm")),
-        "wind_speed":        _safe_float(item.get("ws")),
-        "wind_direction":    _safe_float(item.get("wd")),
-        "precipitation":     _safe_float(item.get("rn_day")),
-        "weather_condition": _wc_to_str(item.get("wc")),
-        "raw_data":          item,
-        "fetched_at":        fetched,
-    }
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+
+        cols = s.split()
+        if len(cols) < 16:
+            continue
+
+        raw = {
+            "tm":  cols[0],  "stn": cols[1],
+            "wd":  cols[2],  "ws":  cols[3],
+            "pa":  cols[7],  "ps":  cols[8],
+            "ta":  cols[11], "td":  cols[12],
+            "hm":  cols[13], "pv":  cols[14],
+            "rn":  cols[15],
+            "wc":  cols[22] if len(cols) > 22 else "-9",
+        }
+
+        return {
+            "stn_id":            stn_id,
+            "tm":                tm,
+            "temperature":       _safe_float(raw["ta"]),
+            "humidity":          _safe_float(raw["hm"]),
+            "wind_speed":        _safe_float(raw["ws"]),
+            "wind_direction":    _safe_int(raw["wd"]),   # 16방위 (1~16)
+            "precipitation":     _safe_float(raw["rn"]),
+            "weather_condition": _wc_to_str(raw["wc"]),
+            "raw_data":          raw,
+            "fetched_at":        fetched,
+        }
+
+    return None
 
 
 def _safe_float(val) -> Optional[float]:
     try:
         f = float(val)
-        return None if f in (-99.0, -999.0, -9999.0) else f
+        return None if f <= -9.0 else f   # -9 이하는 결측값
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_int(val) -> Optional[int]:
+    try:
+        i = int(val)
+        return None if i < 0 else i
     except (TypeError, ValueError):
         return None
 

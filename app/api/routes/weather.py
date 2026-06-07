@@ -9,10 +9,10 @@
   POST /api/weather/race/{race_id}
 """
 from datetime import datetime, timezone
+from typing import Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
-from typing import Literal, Optional
 
 from app.core.database import review_db
 from app.services import kma_service
@@ -109,7 +109,7 @@ def resolve_stn(body: ResolveStnRequest):
 def save_race_weather(
     race_id: int,
     live: bool = Query(False),
-    hour: int  = Query(9, ge=0, le=23, description="대회 시작 시각 (기본 오전 9시)"),
+    hour: Optional[int] = Query(None, ge=0, le=23, description="대회 시작 시각 수동 지정 (미지정 시 지역 기본값 자동 적용)"),
 ):
     """
     races 테이블에서 대회일 조회 → ASOS 날씨 fetch → race_weather upsert.
@@ -118,6 +118,10 @@ def save_race_weather(
       1. races.weather_stn_id (관리자 지정 또는 자동 매핑)
       2. 키워드 맵 (location + city)
       3. Claude AI 추론
+
+    관측 시각 기본값 (hour 미지정 시):
+      서울(stn=108) → 07:30 (KMA ASOS 정시 반올림 → 07:00)
+      그 외 지역    → 08:00
     """
     db = review_db(live=live)
 
@@ -128,10 +132,7 @@ def save_race_weather(
     race      = race_res.data
     race_date = race.get("race_date")  # "YYYY-MM-DD"
 
-    dt = datetime.strptime(race_date, "%Y-%m-%d").replace(hour=hour)
-    tm = dt.strftime("%Y%m%d%H00")
-
-    # 지점코드 결정
+    # 1. 지점코드 결정 (시각 기본값 산정에 필요하므로 먼저 처리)
     if race.get("weather_stn_id"):
         stn_id = int(race["weather_stn_id"])
         method = "manual"
@@ -142,6 +143,18 @@ def save_race_weather(
         )
         # 추론 결과를 races 테이블에 저장 (다음 호출 시 재추론 방지)
         db.table("races").update({"weather_stn_id": stn_id}).eq("id", race_id).execute()
+
+    # 2. 관측 시각 결정
+    # ASOS는 정시(HH:00) 관측 — 서울 07:30 기준 → 07:00, 그 외 08:00
+    if hour is not None:
+        obs_hour, obs_min = hour, 0
+    elif stn_id == 108:
+        obs_hour, obs_min = 7, 0   # 서울 대회 기준 07:30 → ASOS 정시 07:00
+    else:
+        obs_hour, obs_min = 8, 0   # 지방 대회 기본 08:00
+
+    dt = datetime.strptime(race_date, "%Y-%m-%d").replace(hour=obs_hour, minute=obs_min)
+    tm = dt.strftime("%Y%m%d%H%M")
 
     try:
         obs = kma_service.fetch_observation(stn_id=stn_id, tm=tm)
@@ -166,12 +179,14 @@ def save_race_weather(
     db.table("race_weather").upsert(row, on_conflict="race_id").execute()
 
     return {
-        "race_id":   race_id,
-        "race_name": race.get("name"),
-        "stn_id":    stn_id,
+        "race_id":    race_id,
+        "race_name":  race.get("name"),
+        "stn_id":     stn_id,
+        "stn_name":   _STN_NAME_MAP.get(stn_id, ""),
         "stn_method": method,
-        "tm":        tm,
-        "weather":   obs,
+        "tm":         tm,
+        "obs_time":   f"{obs_hour:02d}:{obs_min:02d}",
+        "weather":    obs,
     }
 
 
