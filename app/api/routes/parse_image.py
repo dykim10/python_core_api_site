@@ -2,7 +2,7 @@
 러닝 이미지 파싱 라우터 (app/api/routes/parse_image.py)
 
 CREW(Laravel) 에서 호출하는 핵심 엔드포인트.
-러닝 앱 스크린샷을 S3 에 저장하고, GPT-4o Vision 으로 수치를 추출해 반환한다.
+러닝 앱 스크린샷을 S3 에 저장하고, Claude Vision 으로 수치를 추출해 반환한다.
 
 POST /api/parse-image
   요청  : multipart/form-data — file (이미지, 최대 10MB)
@@ -18,19 +18,25 @@ POST /api/parse-image
     "avg_heart_rate"   : 평균 심박수(int, bpm),
     "is_indoor"        : 실내 여부(bool),
     "elevation_m"      : 누적 고도(float),
-    "raw_parsed"       : GPT 원본 응답 dict
+    "raw_parsed"       : Claude 원본 응답 dict
   }
 
 [처리 흐름]
   1. 파일 타입 · 크기(10MB) 검증
   2. _upload_to_s3 — running-logs/{uuid}.{ext} 경로로 S3 저장
-  3. invoke_with_image — PARSE_PROMPT 로 GPT-4o Vision 파싱
+  3. invoke_with_image — _build_parse_prompt() 로 Claude Vision 파싱
   4. JSON 파싱 (```json 마크다운 블록 제거 후 json.loads)
-  5. _normalize_run_date — 연도 없는 날짜에 올해 연도 자동 추가
+  5. _normalize_run_date — 연도 보정
 
-[_normalize_run_date]
-  연도 없는 날짜(예: "05-24") → 현재 연도 자동 붙임
-  -, /, . 구분자 혼용 포맷 → "YYYY-MM-DD" 통일
+[_normalize_run_date 연도 보정 로직]
+  - year_in_image=True  (이미지에 연도가 명시된 경우):
+      연도를 그대로 신뢰. 미래 날짜인 경우에만 전년도로 교정.
+  - year_in_image=False (이미지에 연도가 없어 Claude가 당해년도를 사용한 경우):
+      너무 오래된 연도(2년 이상 과거)면 당해년도로 교정. 미래 날짜 교정도 적용.
+
+[앱별 날짜 표시 패턴]
+  COROS  : 항상 연도 표시 (예: '2026/06/07', '2026년 6월 7일')
+  Garmin : 당해연도 기록은 연도 생략 (예: '6월 3일'), 과거 기록은 연도 표시 (예: '2024년 9월 22일')
 """
 import json
 import re
@@ -54,27 +60,71 @@ SUPPORTED_TYPES = {
     "image/webp": "image/webp",
 }
 
-PARSE_PROMPT = """이 이미지는 러닝 앱(Nike Run Club, Strava, 가민, 애플워치 등)의 운동 기록 화면입니다.
+# {today_str}, {current_year} 은 _build_parse_prompt() 에서 주입
+# {{ }} 는 str.format() 이스케이프 → 실제 { } 로 출력됨
+PARSE_PROMPT_TEMPLATE = """\
+이 이미지는 러닝 앱(Nike Run Club, Strava, Garmin, COROS, 애플워치 등)의 운동 기록 화면입니다.
 이미지에서 아래 항목을 추출하여 JSON 형식으로만 응답해주세요. 없는 항목은 null로 표기하세요.
 
-{
-  "run_date": "YYYY-MM-DD" (이미지에 표시된 운동 날짜. 연도가 없으면 현재 연도 사용. 없으면 null),
+오늘 날짜: {today_str} (현재 연도: {current_year}년)
+
+{{
+  "app_name": 문자열,
+  "activity_type": 문자열,
+  "run_date": "YYYY-MM-DD",
+  "year_in_image": true/false,
   "distance_km": 숫자 (킬로미터, 소수점 2자리),
   "duration_seconds": 숫자 (총 운동시간, 초 단위 정수),
   "avg_pace_seconds": 숫자 (평균 페이스, 초/km 정수. 예: 5분30초 → 330),
   "best_pace_seconds": 숫자 (최고 페이스, 초/km 정수),
   "calories": 숫자 (정수),
   "avg_heart_rate": 숫자 (정수, bpm),
-  "is_indoor": true/false (트레드밀이면 true, 실외면 false),
+  "is_indoor": true/false (트레드밀/실내이면 true, 실외면 false),
   "elevation_m": 숫자 (누적 고도, 미터),
   "has_map": true/false (지도 포함 여부)
-}
+}}
 
-JSON 외에 다른 텍스트는 절대 포함하지 마세요."""
+[app_name 규칙] 앱 로고·UI 레이아웃으로 판별. 아래 값 중 하나:
+  "coros"          → COROS 앱 (빨간 육각형 기어 로고, 상단에 YYYY/MM/DD 날짜)
+  "garmin"         → Garmin Connect (러너 실루엣 원형 아이콘, 개요/통계/랩/차트 탭)
+  "apple_watch"    → Apple Watch / Apple Fitness (링 형태 활동 UI, iOS 스타일)
+  "samsung_health" → Samsung Health (삼성헬스, 갤럭시 워치 연동)
+  "nike_run_club"  → Nike Run Club (NRC, 나이키 로고)
+  "strava"         → Strava (주황색 S 로고)
+  "polar"          → Polar Flow (Polar 로고, 핀란드 브랜드)
+  "suunto"         → Suunto (핀란드 브랜드, 독특한 지도 색상)
+  "amazfit"        → Amazfit / Zepp (화미, Zepp 로고)
+  "huawei_health"  → Huawei Health / 화웨이 헬스
+  "adidas_running" → Adidas Running / Runtastic
+  "xiaomi_fitness" → Xiaomi Mi Fitness / 샤오미
+  "wahoo"          → Wahoo (자전거·트라이애슬론 전용)
+  "unknown"        → 판별 불가
+
+[activity_type 규칙] 활동 유형 레이블·지도·수치 패턴으로 판별. 아래 값 중 하나:
+  "running"       → 일반 러닝 (예: '러닝', 'Running', 'Road Run')
+  "trail_running" → 트레일 러닝 (예: '트레일 러닝', 'Trail Run', 고도 상승 큰 경우)
+  "treadmill"     → 트레드밀 실내 러닝 (지도 없음 + 실내 레이블 또는 '러닝머신', 'Treadmill')
+  "walking"       → 걷기 (예: '걷기', 'Walking', 페이스 8분/km 이상)
+  "cycling"       → 자전거 (예: '사이클링', 'Cycling', 'Ride')
+  "unknown"       → 판별 불가
+  ※ is_indoor: activity_type이 "treadmill"이면 반드시 true
+
+[run_date 추출 규칙]
+- 연도(4자리)가 이미지에 명시된 경우: 그 연도를 그대로 사용하고 year_in_image를 true로 설정
+  예) '2024년 9월 22일' → "2024-09-22", year_in_image: true
+  예) '2026/06/07' → "2026-06-07", year_in_image: true
+- 연도 없이 월/일만 있는 경우: 현재 연도({current_year})를 사용하고 year_in_image를 false로 설정
+  예) '6월 3일' → "{current_year}-06-03", year_in_image: false
+- 날짜 정보가 전혀 없으면: null
+
+JSON 외에 다른 텍스트는 절대 포함하지 마세요.\
+"""
 
 
 class ParseImageResponse(BaseModel):
     s3_url: str
+    app_name: Optional[str] = None
+    activity_type: Optional[str] = None
     run_date: Optional[str] = None
     distance_km: Optional[float] = None
     duration_seconds: Optional[int] = None
@@ -88,14 +138,22 @@ class ParseImageResponse(BaseModel):
     raw_parsed: dict = {}
 
 
-def _normalize_run_date(raw: str | None) -> str | None:
+def _build_parse_prompt() -> str:
+    today = date_type.today()
+    return PARSE_PROMPT_TEMPLATE.format(
+        today_str=today.strftime('%Y년 %m월 %d일'),
+        current_year=today.year,
+    )
+
+
+def _normalize_run_date(raw: str | None, year_in_image: bool = True) -> str | None:
     if not raw:
         return None
     raw = str(raw).strip()
     today = date_type.today()
     current_year = today.year
 
-    # 4자리 연도가 없으면 당해년도 붙임
+    # 4자리 연도가 없으면 당해년도 붙임 (Claude가 연도 없이 반환한 경우)
     if not re.search(r'\b\d{4}\b', raw):
         raw = f"{current_year}-{raw}"
 
@@ -110,12 +168,12 @@ def _normalize_run_date(raw: str | None) -> str | None:
     if parsed_date is None:
         return None
 
-    # 연도가 2년 이상 과거이면 올해로 교정
-    # 이미지에 연도 미표시 → GPT가 잘못된 연도(2020, 2023 등)를 반환하는 환각 방어
-    if parsed_date.year < current_year - 1:
+    # 이미지에 연도가 없는 경우에만 "너무 오래된 연도" 교정 적용
+    # 이미지에 연도가 있으면 과거 기록도 그대로 신뢰 (예: 2024년 9월 22일 실제 기록)
+    if not year_in_image and parsed_date.year < current_year - 1:
         parsed_date = parsed_date.replace(year=current_year)
 
-    # 미래 날짜이면 전년도로 교정 (예: 12월 기록을 다음해 1월에 업로드하는 경우 제외한 순수 오류)
+    # 미래 날짜이면 전년도로 교정 (최후 안전망)
     if parsed_date.date() > today:
         parsed_date = parsed_date.replace(year=current_year - 1)
 
@@ -159,9 +217,10 @@ async def parse_image(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"S3 업로드 실패: {str(e)}")
 
-    # 2. GPT-4o Vision 파싱
+    # 2. Claude Vision 파싱
     try:
-        raw = invoke_with_image(image_bytes, media_type, PARSE_PROMPT)
+        prompt = _build_parse_prompt()
+        raw = invoke_with_image(image_bytes, media_type, prompt)
         cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         parsed = json.loads(cleaned)
     except json.JSONDecodeError:
@@ -169,16 +228,26 @@ async def parse_image(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI 파싱 오류: {str(e)}")
 
+    year_in_image = bool(parsed.get("year_in_image", True))
+    activity_type = parsed.get("activity_type") or "unknown"
+
+    # treadmill이면 is_indoor를 강제 true (프롬프트 지시 보강)
+    is_indoor = bool(parsed.get("is_indoor") or False)
+    if activity_type == "treadmill":
+        is_indoor = True
+
     return ParseImageResponse(
         s3_url=s3_url,
-        run_date=_normalize_run_date(parsed.get("run_date")),
+        app_name=parsed.get("app_name") or "unknown",
+        activity_type=activity_type,
+        run_date=_normalize_run_date(parsed.get("run_date"), year_in_image),
         distance_km=parsed.get("distance_km"),
         duration_seconds=parsed.get("duration_seconds"),
         avg_pace_seconds=parsed.get("avg_pace_seconds"),
         best_pace_seconds=parsed.get("best_pace_seconds"),
         calories=parsed.get("calories"),
         avg_heart_rate=parsed.get("avg_heart_rate"),
-        is_indoor=bool(parsed.get("is_indoor") or False),
+        is_indoor=is_indoor,
         elevation_m=parsed.get("elevation_m"),
         has_map=parsed.get("has_map"),
         raw_parsed=parsed,
