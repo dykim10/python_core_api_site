@@ -35,10 +35,11 @@ import json
 import logging
 import urllib3
 import requests
+import anthropic
 from bs4 import BeautifulSoup, Comment
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime
 from urllib.parse import urljoin
 
 logger = logging.getLogger(__name__)
@@ -651,3 +652,185 @@ def crawl_all(limit: int = 30) -> list[dict]:
     mg_races = crawl_marathongo(limit=limit)
     rr_races = crawl_roadrun(limit=limit)
     return _dedup_races(mg_races, rr_races)
+
+
+# ── World Athletics Label Road Races (Wikipedia) ──────────────────────────────
+
+def parse_wa_race_date(date_str: str, year: int) -> Optional[str]:
+    """Wikipedia WA 라벨 날짜 문자열을 ISO 날짜로 변환.
+    예: '17 Mar', '7 Apr' + year=2024 → '2024-03-17'
+    """
+    if not date_str:
+        return None
+    # "17 Mar–19 Mar" 같은 범위 표기는 시작일만 사용
+    date_str = date_str.split("–")[0].split("-")[0].strip()
+    for fmt in ("%d %b %Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(f"{date_str} {year}", fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def _wa_label_from_text(text: str) -> Optional[str]:
+    """텍스트에서 WA 라벨 등급 추출. 대소문자 무관."""
+    t = text.lower()
+    if "platinum" in t:
+        return "platinum"
+    if "gold" in t:
+        return "gold"
+    if "elite" in t:
+        return "elite"
+    if "label" in t:
+        return "label"
+    return None
+
+
+def crawl_wa_label_races(year: int) -> list[dict]:
+    """Wikipedia에서 WA Label Road Races 목록을 파싱해 반환한다.
+
+    URL: https://en.wikipedia.org/wiki/{year}_World_Athletics_Label_Road_Races
+    라이선스: CC BY-SA (상업적 이용 가능)
+    반환 필드: date, name, city, country, wa_label, source, source_url
+
+    [페이지 구조]
+    단일 wikitable 안에서 라벨 구분 행(colspan 셀)이 구간을 나눈다.
+      Platinum(16)  ← 셀이 1개인 구분 행
+      7 Jan | Marathon X | City | Country  ← 대회 행
+      ...
+      Gold(45)      ← 다음 구분 행
+      ...
+    """
+    url = f"https://en.wikipedia.org/wiki/{year}_World_Athletics_Label_Road_Races"
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"Wikipedia WA 라벨 페이지 fetch 실패 ({year}): {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    tables = soup.find_all("table", class_="wikitable")
+
+    if not tables:
+        logger.warning(f"Wikipedia WA 라벨 ({year}): wikitable 없음 — 페이지 구조 변경 가능성")
+        return []
+
+    races: list[dict] = []
+    for table in tables:
+        rows = table.find_all("tr")
+        if not rows:
+            continue
+
+        # 헤더 행의 컬럼 인덱스 동적 파악 (연도별 컬럼 순서 변경 대응)
+        header_row = rows[0]
+        headers = [th.get_text(strip=True).lower() for th in header_row.find_all(["th", "td"])]
+
+        col_date    = next((i for i, h in enumerate(headers) if "date" in h), 0)
+        col_name    = next((i for i, h in enumerate(headers) if "meeting" in h or "race" in h or "event" in h or "name" in h), 1)
+        col_city    = next((i for i, h in enumerate(headers) if "venue" in h or "city" in h or "location" in h), 2)
+        col_country = next((i for i, h in enumerate(headers) if "country" in h or "nation" in h), 3)
+
+        current_label: Optional[str] = None
+
+        for row in rows[1:]:
+            cells = row.find_all(["td", "th"])
+
+            # colspan 구분 행 — 라벨 등급 전환
+            if len(cells) == 1:
+                label = _wa_label_from_text(cells[0].get_text(strip=True))
+                if label:
+                    current_label = label
+                continue
+
+            if len(cells) < 2:
+                continue
+
+            def _cell(idx: int) -> str:
+                if idx < len(cells):
+                    return cells[idx].get_text(separator=" ", strip=True)
+                return ""
+
+            # 각주([1], [2]) 제거
+            name = re.sub(r"\[\d+\]", "", _cell(col_name)).strip()
+            if not name:
+                continue
+
+            races.append({
+                "date":       re.sub(r"\[\d+\]", "", _cell(col_date)).strip(),
+                "name":       name,
+                "city":       re.sub(r"\[\d+\]", "", _cell(col_city)).strip(),
+                "country":    re.sub(r"\[\d+\]", "", _cell(col_country)).strip(),
+                "wa_label":   current_label,
+                "source":     "world_athletics",
+                "source_url": url,
+            })
+
+    logger.info(f"Wikipedia WA 라벨 ({year}): {len(races)}건 수집")
+    return races
+
+
+def _translate_batch(names_en: list[str], client) -> list[str]:
+    """영문 대회명 배치를 한국어로 번역. 실패 시 원문 반환."""
+    prompt = (
+        "다음 마라톤/러닝 대회 영문명을 한국어로 번역해 JSON 문자열 배열로만 응답하세요.\n"
+        "응답 형식: [\"한국어명1\", \"한국어명2\", ...]\n"
+        "규칙:\n"
+        "- 잘 알려진 대회는 공식 한국어 표기 사용 (예: Tokyo Marathon → 도쿄마라톤)\n"
+        "- 생소한 대회는 '도시명+마라톤/대회' 형식으로 번역\n"
+        "- 객체(dict) 금지, 반드시 문자열만 포함\n"
+        "- 코드블록 없이 순수 JSON 배열만 출력\n"
+        f"- 반드시 {len(names_en)}개 항목 출력\n\n"
+        + json.dumps(names_en, ensure_ascii=False)
+    )
+    try:
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = message.content[0].text.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        parsed = json.loads(raw)
+        # dict 응답 방어: {"0": "이름", ...} 형태면 values 추출
+        if isinstance(parsed, dict):
+            parsed = list(parsed.values())
+        names_ko = [
+            v if isinstance(v, str)
+            else v.get("korean") or v.get("ko") or v.get("name") or next(iter(v.values()), "")
+            for v in parsed
+        ]
+        if len(names_ko) == len(names_en):
+            return names_ko
+        logger.warning(f"번역 배치 수 불일치: 입력 {len(names_en)} / 결과 {len(names_ko)} — 원문 유지")
+    except Exception as e:
+        logger.warning(f"번역 배치 실패: {e} — 원문 유지")
+    return names_en
+
+
+def translate_race_names_to_korean(races: list[dict], batch_size: int = 50) -> list[dict]:
+    """WA 영문 대회명을 한국어로 일괄 번역 (Claude Haiku, 50개씩 배치).
+
+    각 race dict에 name_en(원문) 필드를 추가하고, name을 한국어로 교체한다.
+    배치 단위로 처리하므로 일부 실패 시 해당 배치만 영문명 유지한다.
+    """
+    if not races:
+        return races
+
+    from app.core.config import settings
+    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+    names_ko_all: list[str] = []
+    names_en_all = [r["name"] for r in races]
+
+    for i in range(0, len(names_en_all), batch_size):
+        batch = names_en_all[i: i + batch_size]
+        names_ko_all.extend(_translate_batch(batch, client))
+        logger.info(f"WA 번역 진행: {min(i + batch_size, len(races))}/{len(races)}")
+
+    for i, race in enumerate(races):
+        race["name_en"] = race["name"]
+        race["name"]    = names_ko_all[i]
+
+    return races
