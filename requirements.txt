@@ -17,3 +17,4 @@ apify-client>=1.7.0
 Pillow>=11.0.0
 APScheduler>=3.10.0
 pytz>=2024.1
+resend>=2.0.0

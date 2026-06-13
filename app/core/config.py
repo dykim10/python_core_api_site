@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     backup_api_key: str = ""
     backup_retention_days: int = 7
 
+    # ── 이메일 (Resend) ───────────────────────────────────────────────────────
+    resend_api_key: str = ""
+    mail_from_address: str = "noreply@pac-run.com"
+    mail_from_name: str = "PAC-RUN"
+
     class Config:
         env_file = ".env"
         extra = "ignore"

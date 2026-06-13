@@ -203,7 +203,7 @@ def _upload_to_s3(image_bytes: bytes, content_type: str) -> str:
 
 @router.post("/parse-image", response_model=ParseImageResponse)
 async def parse_image(file: UploadFile = File(...)):
-    media_type = SUPPORTED_TYPES.get(file.content_type)
+    media_type = SUPPORTED_TYPES.get(file.content_type or "")
     if not media_type:
         raise HTTPException(status_code=400, detail=f"지원하지 않는 이미지 형식: {file.content_type}")
 
