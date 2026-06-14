@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     mail_from_address: str = "noreply@pac-run.com"
     mail_from_name: str = "PAC-RUN"
+    mailing_test_email: str = ""  # 설정 시 서버 시작 90분 후 테스트 발송
 
     class Config:
         env_file = ".env"

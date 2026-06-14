@@ -31,9 +31,11 @@ SYNC_TABLES: list[tuple[str, str]] = [
     # public (races / reviews 의 user_id FK 대비)
     ("public", "users"),
     # review 스키마
-    ("review", "races"),           # 대회 정보
-    ("review", "race_weather"),    # 대회 날씨 (races 의존)
-    ("review", "reviews"),         # 참가 후기 (races + users 의존)
+    ("review", "races"),              # 대회 정보
+    ("review", "race_editions"),      # 대회 개최 이력 (races 의존)
+    ("review", "race_weather"),       # 대회 날씨 (races 의존)
+    ("review", "reviews"),            # 참가 후기 (races + users 의존)
+    ("review", "completion_records"), # 완주 기록 (race_editions + users 의존)
 ]
 
 
