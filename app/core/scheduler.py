@@ -109,16 +109,18 @@ def start() -> None:
 
     # 서버 시작 후 90분 1회 테스트 발송 (MAILING_TEST_EMAIL 환경변수 설정 시에만)
     from app.core.config import settings
+    from zoneinfo import ZoneInfo
     test_email = getattr(settings, "mailing_test_email", None)
     if test_email:
-        run_at = datetime.now() + timedelta(minutes=90)
+        kst = ZoneInfo("Asia/Seoul")
+        run_at = datetime.now(tz=kst) + timedelta(minutes=90)
         scheduler.add_job(
             lambda: _run_test_mailing(test_email),
-            DateTrigger(run_date=run_at, timezone="Asia/Seoul"),
+            DateTrigger(run_date=run_at),
             id="weekly_mailing_test",
             replace_existing=True,
         )
-        logger.info(f"[스케줄러] 테스트 발송 예약 → {run_at.strftime('%H:%M')} ({test_email})")
+        logger.info(f"[스케줄러] 테스트 발송 예약 → {run_at.strftime('%H:%M KST')} ({test_email})")
 
     scheduler.start()
     logger.info(
