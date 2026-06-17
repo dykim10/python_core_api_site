@@ -1,9 +1,6 @@
-import logging
 import os
 
 from dotenv import load_dotenv
-
-logger = logging.getLogger(__name__)
 
 REGION = "ap-northeast-2"
 PATH_PREFIX = "/pac-run/prod/"
@@ -53,4 +50,5 @@ def load_secrets() -> None:
                 os.environ[env_name] = p["Value"]
                 loaded += 1
 
-    logger.info(f"[secrets] Parameter Store에서 {loaded}개 비밀 로드 완료")
+    # uvicorn이 logging 초기화 전에 호출되므로 logger.info 가 dropped됨 → print 사용
+    print(f"[secrets] Parameter Store에서 {loaded}개 비밀 로드 완료", flush=True)
