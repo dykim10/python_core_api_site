@@ -39,7 +39,7 @@ load_secrets()
 
 from app.core.config import settings
 from app.core.database import public_db, review_db, crew_db
-from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize, crypto, participants, sms, s3, apify, photo, backup, weather, email, mailing
+from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize, crypto, participants, sms, s3, apify, photo, backup, weather, email, mailing, gpx
 
 try:
     from app.core import scheduler as sched
@@ -83,6 +83,7 @@ app.include_router(backup.router)
 app.include_router(weather.router)
 app.include_router(email.router)
 app.include_router(mailing.router)
+app.include_router(gpx.router)
 
 
 @app.get("/")
