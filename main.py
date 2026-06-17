@@ -31,6 +31,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+# settings(app.core.config) 가 import 되기 전에 호출해야 Parameter Store 값이
+# Settings 필드에 반영된다. import 순서를 절대 바꾸지 말 것.
+from app.core.secrets_loader import load_secrets
+
+load_secrets()
+
 from app.core.config import settings
 from app.core.database import public_db, review_db, crew_db
 from app.api.routes import running_logs, users, races, parse_image, race_info, summarize, race_summarize, crypto, participants, sms, s3, apify, photo, backup, weather, email, mailing

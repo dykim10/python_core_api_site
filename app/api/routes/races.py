@@ -54,7 +54,7 @@ def get_races(limit: int = 20):
         .table("races")
         .select("*")
         .eq("is_active", True)
-        .order("race_date", desc=True)
+        .order("id", desc=True)
         .limit(limit)
         .execute()
     )
@@ -105,9 +105,7 @@ def sync_wa_label_races(year: int = 0):
                 "name":        race["name"],
                 "name_en":     race.get("name_en", ""),
                 "city":        race.get("city", ""),
-                "race_date":   parse_wa_race_date(race.get("date", ""), target_year),
                 "is_active":   True,
-                "status":      "active",
                 **cert_payload,
             }).execute()
             inserted += 1
@@ -138,8 +136,8 @@ def get_race(race_id: int):
 
 @router.post("/", response_model=dict)
 def create_race(payload: dict):
-    if "race_date" in payload:
-        payload["race_date"] = str(payload["race_date"])
+    # race_date 는 race_editions 로 분리됨 (Phase 5) — races 마스터에 저장 금지
+    payload.pop("race_date", None)
     res = review_db().table("races").insert(payload).execute()
     if not res.data:
         raise HTTPException(status_code=400, detail="저장 실패")

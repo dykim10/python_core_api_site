@@ -13,7 +13,9 @@ Vision AI 클라이언트 (app/services/claude_client.py)
   parse_image.py → PARSE_PROMPT 로 러닝 기록 수치 추출
 """
 import base64
+from typing import cast
 import anthropic
+from anthropic.types import MessageParam
 from app.core.config import settings
 
 
@@ -24,7 +26,7 @@ def invoke_with_image(image_bytes: bytes, media_type: str, prompt: str) -> str:
     response = client.messages.create(
         model="claude-opus-4-8",
         max_tokens=1024,
-        messages=[
+        messages=cast(list[MessageParam], [
             {
                 "role": "user",
                 "content": [
@@ -42,7 +44,10 @@ def invoke_with_image(image_bytes: bytes, media_type: str, prompt: str) -> str:
                     },
                 ],
             }
-        ],
+        ]),
     )
 
-    return response.content[0].text
+    for block in response.content:
+        if block.type == "text":
+            return block.text
+    raise ValueError(f"응답에 text 블록이 없습니다. stop_reason={response.stop_reason}")
