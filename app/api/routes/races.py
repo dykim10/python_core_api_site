@@ -44,7 +44,7 @@ def sync_wa_label_races_endpoint(
     translate: bool = True,
     organiser: bool = True,
 ):
-    """WA 라벨 대회를 review.races + review.race_editions에 upsert한다."""
+    """WA 시즌 Label Road Races → races upsert + 연도별 공인/비공인 (editions 없음)."""
     target_year = year if year > 0 else datetime.now().year
     result = sync_wa_label_races(
         target_year,

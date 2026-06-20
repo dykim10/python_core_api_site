@@ -1,12 +1,24 @@
 """
-World Athletics Label Road Races → review.races + review.race_editions sync.
+World Athletics Label Road Races → review.races 마스터 카탈로그 sync.
+
+정합성 원칙 (2026-06-20 확정):
+  - 소스: World Athletics 공식 GraphQL (Wikipedia 폐기)
+  - races 마스터만 — race_editions 미생성 (TASK-REMODEL-02)
+  - wa_calendar[season]: 연도별 Label Road Races 등재 이력
+  - season sync 1회 = 해당 시즌 공인 목록 기준 upsert + 미등재 대회 delist
+
+공인 판정 (시즌 Y sync 후):
+  - Y 목록에 있음     → wa_calendar[Y].listed=true,  is_certified=true,  wa_label 설정
+  - Y 목록에 없음     → wa_calendar[Y].listed=false, is_certified=false, wa_label=null
+    (과거 wa_calendar[Y-1].listed=true 는 이력으로 유지 → UI "24 공인 / 25 비공인")
+  - Y에만 신규        → insert (신규 공인 대회)
+  - 국내 is_domestic=true 카탈로그는 sync 대상 제외
 """
 from __future__ import annotations
 
 import logging
-import re
-from datetime import date, datetime
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import Any
 
 from app.core.database import review_db
 from app.services.race_crawler import crawl_wa_label_races, translate_race_names_to_korean
@@ -69,13 +81,52 @@ def country_name(iso3: str) -> str:
     return _ISO3_COUNTRY.get(code, code)
 
 
-def edition_status(race_date: Optional[str]) -> str:
-    if not race_date:
-        return "upcoming"
-    try:
-        return "ended" if date.fromisoformat(race_date) < date.today() else "upcoming"
-    except ValueError:
-        return "upcoming"
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _calendar_entry_listed(race: dict, sync_year: int) -> dict[str, Any]:
+    """시즌 Label Road Races 등재 — listed=true."""
+    return {
+        "listed": True,
+        "start_date": race.get("race_date"),
+        "end_date": race.get("end_date"),
+        "wa_competition_id": race.get("wa_competition_id"),
+        "source_url": race.get("source_url"),
+        "wa_label": race.get("wa_label"),
+        "venue": race.get("venue") or race.get("location"),
+        "synced_at": _now_iso(),
+        "sync_season": sync_year,
+    }
+
+
+def _calendar_entry_delisted(sync_year: int) -> dict[str, Any]:
+    """해당 시즌 Label Road Races 목록 미등재 — listed=false."""
+    return {
+        "listed": False,
+        "synced_at": _now_iso(),
+        "sync_season": sync_year,
+    }
+
+
+def _merge_wa_calendar(existing: Any, sync_year: int, entry: dict[str, Any]) -> dict[str, Any]:
+    cal: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+    cal[str(sync_year)] = entry
+    return cal
+
+
+def _race_name_key(row: dict) -> str:
+    return (row.get("name_en") or row.get("name") or "").strip().lower()
+
+
+def _is_wa_certification_target(row: dict) -> bool:
+    """국내 카탈로그 제외 — WA 공인 갱신 대상만."""
+    if row.get("is_domestic"):
+        return False
+    cal = row.get("wa_calendar") or {}
+    if isinstance(cal, dict) and cal:
+        return True
+    return bool(row.get("is_certified"))
 
 
 def sync_wa_label_races(
@@ -85,16 +136,15 @@ def sync_wa_label_races(
     fetch_organiser: bool = True,
     live: bool = False,
 ) -> dict[str, Any]:
-    """WA 라벨 대회를 races + race_editions에 upsert."""
+    """WA 시즌 Y Label Road Races → races upsert + 연도별 공인/비공인 갱신."""
     wa_races = crawl_wa_label_races(year, fetch_organiser=fetch_organiser)
     if not wa_races:
         return {
             "year": year,
             "total": 0,
-            "races_inserted": 0,
-            "races_updated": 0,
-            "editions_inserted": 0,
-            "editions_updated": 0,
+            "inserted": 0,
+            "updated": 0,
+            "decertified": 0,
             "skipped": 0,
         }
 
@@ -103,42 +153,32 @@ def sync_wa_label_races(
 
     db = review_db(live)
 
-    races_res = db.table("races").select("id,name,name_en,wa_label").execute()
-    races_by_name_en: dict[str, dict] = {}
-    for row in races_res.data or []:
-        for key in (row.get("name_en"), row.get("name")):
-            if key:
-                races_by_name_en[key.lower()] = row
-
-    editions_res = db.table("race_editions").select(
-        "id,race_id,year,wa_competition_id"
+    races_res = db.table("races").select(
+        "id,name,name_en,wa_label,is_certified,is_domestic,wa_calendar"
     ).execute()
-    editions_by_wa_id = {
-        row["wa_competition_id"]: row
-        for row in (editions_res.data or [])
-        if row.get("wa_competition_id")
-    }
-    editions_by_race_year = {
-        (row["race_id"], row["year"]): row
-        for row in (editions_res.data or [])
-        if row.get("race_id") is not None
-    }
+    all_rows = races_res.data or []
 
-    races_inserted = races_updated = 0
-    editions_inserted = editions_updated = 0
-    skipped = 0
+    races_by_name_en: dict[str, dict] = {}
+    for row in all_rows:
+        key = _race_name_key(row)
+        if key:
+            races_by_name_en[key] = row
+
+    inserted = updated = decertified = skipped = 0
+    synced_keys: set[str] = set()
 
     for race in wa_races:
         name_en = (race.get("name_en") or race.get("name") or "").strip()
-        if not name_en:
+        key = name_en.lower()
+        if not key:
             skipped += 1
             continue
 
-        wa_comp_id = race.get("wa_competition_id")
-        existing_race = races_by_name_en.get(name_en.lower())
-        race_id: Optional[int] = existing_race["id"] if existing_race else None
+        synced_keys.add(key)
+        existing_race = races_by_name_en.get(key)
+        cal_entry = _calendar_entry_listed(race, year)
 
-        race_payload = {
+        race_payload: dict[str, Any] = {
             "name": race.get("name") or name_en,
             "name_en": name_en,
             "city": race.get("city") or "",
@@ -147,6 +187,11 @@ def sync_wa_label_races(
             "is_certified": True,
             "is_domestic": False,
             "is_active": True,
+            "wa_calendar": _merge_wa_calendar(
+                existing_race.get("wa_calendar") if existing_race else {},
+                year,
+                cal_entry,
+            ),
         }
         if race.get("official_url"):
             race_payload["official_url"] = race["official_url"]
@@ -155,67 +200,54 @@ def sync_wa_label_races(
         if race.get("organizer"):
             race_payload["organizer"] = race["organizer"]
 
-        if race_id:
-            db.table("races").update(race_payload).eq("id", race_id).execute()
-            races_updated += 1
+        if existing_race:
+            db.table("races").update(race_payload).eq("id", existing_race["id"]).execute()
+            existing_race.update(race_payload)
+            updated += 1
         else:
             ins = db.table("races").insert(race_payload).execute()
             if ins.data:
-                race_id = ins.data[0]["id"]
-                races_by_name_en[name_en.lower()] = {"id": race_id, **race_payload}
-                races_inserted += 1
+                row = ins.data[0]
+                races_by_name_en[key] = row
+                all_rows.append(row)
+                inserted += 1
             else:
                 skipped += 1
-                continue
 
-        year_val = int(race.get("year") or year)
-        race_date = race.get("race_date")
-        edition_payload = {
-            "race_id": race_id,
-            "name": name_en,
-            "year": year_val,
-            "race_date": race_date,
-            "location": race.get("location") or race.get("venue") or "",
-            "city": race.get("city") or "",
-            "country": country_name(race.get("country", "")),
-            "is_domestic": False,
-            "source": "world_athletics",
-            "source_url": race.get("source_url", ""),
-            "status": edition_status(race_date),
-            "is_review_open": False,
-            "is_active": True,
-        }
-        if wa_comp_id is not None:
-            edition_payload["wa_competition_id"] = wa_comp_id
+    # 시즌 Y 목록에 없는 WA 추적 대회 → 해당 시즌 비공인 처리
+    for row in all_rows:
+        if not _is_wa_certification_target(row):
+            continue
+        key = _race_name_key(row)
+        if not key or key in synced_keys:
+            continue
 
-        existing_ed = None
-        if wa_comp_id:
-            existing_ed = editions_by_wa_id.get(wa_comp_id)
-        if not existing_ed and race_id:
-            existing_ed = editions_by_race_year.get((race_id, year_val))
+        new_cal = _merge_wa_calendar(
+            row.get("wa_calendar"),
+            year,
+            _calendar_entry_delisted(year),
+        )
+        db.table("races").update({
+            "wa_calendar": new_cal,
+            "is_certified": False,
+            "wa_label": None,
+        }).eq("id", row["id"]).execute()
+        decertified += 1
 
-        if existing_ed:
-            db.table("race_editions").update(edition_payload).eq(
-                "id", existing_ed["id"]
-            ).execute()
-            editions_updated += 1
-        else:
-            ins_ed = db.table("race_editions").insert(edition_payload).execute()
-            if ins_ed.data:
-                editions_inserted += 1
-                new_id = ins_ed.data[0]["id"]
-                if wa_comp_id:
-                    editions_by_wa_id[wa_comp_id] = {"id": new_id, "race_id": race_id, "year": year_val}
-                editions_by_race_year[(race_id, year_val)] = {"id": new_id, "race_id": race_id, "year": year_val}
-            else:
-                skipped += 1
+    logger.info(
+        "WA sync season=%s: inserted=%d updated=%d decertified=%d skipped=%d",
+        year,
+        inserted,
+        updated,
+        decertified,
+        skipped,
+    )
 
     return {
         "year": year,
         "total": len(wa_races),
-        "races_inserted": races_inserted,
-        "races_updated": races_updated,
-        "editions_inserted": editions_inserted,
-        "editions_updated": editions_updated,
+        "inserted": inserted,
+        "updated": updated,
+        "decertified": decertified,
         "skipped": skipped,
     }

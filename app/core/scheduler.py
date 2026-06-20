@@ -4,7 +4,7 @@ APScheduler 설정 (app/core/scheduler.py)
 FastAPI lifespan 에서 시작/종료.
 현재 등록된 작업:
   - daily_backup           : 매일 00:00 KST — DB 전체 백업
-  - wa_label_sync          : 매년 12월 1일 02:00 KST — WA 라벨 대회 목록 갱신
+  - wa_label_sync          : 매년 1월 15일 02:00 KST — 당해 시즌 WA Label 공인 목록 갱신
   - weekly_crew_mailing    : 매주 월요일 06:00 KST — 주간 크루 뉴스레터 발송
   - weekly_mailing_test    : 서버 시작 후 90분 1회 — 테스트 발송 (MAILING_TEST_EMAIL 설정 시)
 """
@@ -33,25 +33,24 @@ def _wa_sync_job() -> None:
     from datetime import datetime
     from app.services.wa_sync_service import sync_wa_label_races
 
-    next_year = datetime.now().year + 1
-    logger.info(f"[스케줄] WA 라벨 대회 갱신 시작 — {next_year}년")
+    season = datetime.now().year
+    logger.info(f"[스케줄] WA Label Road Races 공인 갱신 — season={season}")
 
     result = sync_wa_label_races(
-        next_year,
+        season,
         translate=True,
         fetch_organiser=False,
     )
     if result["total"] == 0:
-        logger.warning(f"[스케줄] WA 라벨 대회 없음 — {next_year}년")
+        logger.warning(f"[스케줄] WA 시즌 목록 없음 — {season}")
         return
 
     logger.info(
-        "[스케줄] WA 라벨 갱신 완료 — %s년: races +%d/~%d editions +%d/~%d skipped %d",
-        next_year,
-        result["races_inserted"],
-        result["races_updated"],
-        result["editions_inserted"],
-        result["editions_updated"],
+        "[스케줄] WA 공인 갱신 완료 season=%s: 신규 %d / 갱신 %d / 비공인 %d / skip %d",
+        season,
+        result["inserted"],
+        result["updated"],
+        result["decertified"],
         result["skipped"],
     )
 
@@ -90,7 +89,7 @@ def start() -> None:
     )
     scheduler.add_job(
         _wa_sync_job,
-        CronTrigger(month=12, day=1, hour=2, minute=0, timezone="Asia/Seoul"),
+        CronTrigger(month=1, day=15, hour=2, minute=0, timezone="Asia/Seoul"),
         id="wa_label_sync",
         replace_existing=True,
         misfire_grace_time=86400,
@@ -123,7 +122,7 @@ def start() -> None:
         "[스케줄러] 시작 — "
         "daily_backup 매일 00:00 KST / "
         "batch_race_summaries 매일 03:00 KST / "
-        "wa_label_sync 매년 12/1 02:00 KST / "
+        "wa_label_sync 매년 1/15 02:00 KST (당해 season) / "
         "weekly_crew_mailing 매주 월요일 06:00 KST"
     )
 

@@ -729,6 +729,7 @@ def _wa_event_to_dict(
     name_en = normalize_wa_name_en(name_raw)
     comp_id = event.get("id")
     start_date = event.get("startDate") or ""
+    end_date = event.get("endDate") or ""
 
     from app.services.wa_graphql import result_page_url
 
@@ -742,6 +743,7 @@ def _wa_event_to_dict(
         "venue": venue,
         "location": venue,
         "race_date": start_date or None,
+        "end_date": end_date or None,
         "year": int(start_date[:4]) if start_date and len(start_date) >= 4 else season,
         "wa_label": map_wa_label(
             event.get("rankingCategory"),
