@@ -31,7 +31,7 @@ def get_user_logs(user_id: int, limit: int = 20):
         .table("running_logs")
         .select("*")
         .eq("user_id", user_id)
-        .order("log_date", desc=True)
+        .order("run_date", desc=True)
         .limit(limit)
         .execute()
     )

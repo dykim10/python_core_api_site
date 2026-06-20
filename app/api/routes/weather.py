@@ -6,7 +6,7 @@
   POST /api/weather/stations/sync
   GET  /api/weather/observation
   POST /api/weather/resolve-stn   ← 장소명 → 지점코드 추론 (REVIEW 대회 등록 시 호출)
-  POST /api/weather/race/{race_id}
+  POST /api/weather/race/{edition_id}
 """
 from datetime import datetime, timezone
 from typing import Literal, Optional
@@ -105,53 +105,73 @@ def resolve_stn(body: ResolveStnRequest):
 
 # ── 대회 날씨 저장 ────────────────────────────────────────────────────────────
 
-@router.post("/race/{race_id}")
+@router.post("/race/{edition_id}")
 def save_race_weather(
-    race_id: int,
+    edition_id: int,
     live: bool = Query(False),
     hour: Optional[int] = Query(None, ge=0, le=23, description="대회 시작 시각 수동 지정 (미지정 시 지역 기본값 자동 적용)"),
 ):
     """
-    races 테이블에서 대회일 조회 → ASOS 날씨 fetch → race_weather upsert.
+    race_editions 테이블에서 대회일 조회 → ASOS 날씨 fetch → race_weather upsert.
+
+    edition당 1 row — 이미 수집된 경우 재수집하지 않음.
 
     지점코드 우선순위:
-      1. races.weather_stn_id (관리자 지정 또는 자동 매핑)
+      1. race_editions.weather_stn_id
       2. 키워드 맵 (location + city)
       3. Claude AI 추론
-
-    관측 시각 기본값 (hour 미지정 시):
-      서울(stn=108) → 07:00
-      그 외 지역    → 08:00
     """
     db = review_db(live=live)
 
-    race_res = db.table("races").select("id, name, race_date, location, city, weather_stn_id").eq("id", race_id).single().execute()
-    if not race_res.data:
-        raise HTTPException(status_code=404, detail="대회 없음")
+    existing = (
+        db.table("race_weather")
+        .select("*")
+        .eq("race_edition_id", edition_id)
+        .limit(1)
+        .execute()
+    )
+    if existing.data and existing.data[0].get("temperature") is not None:
+        row = existing.data[0]
+        return {
+            "race_edition_id": edition_id,
+            "cached": True,
+            "stn_id": row.get("stn_id"),
+            "weather": row,
+        }
 
-    race      = race_res.data
-    race_date = race.get("race_date")  # "YYYY-MM-DD"
+    edition_res = (
+        db.table("race_editions")
+        .select("id, race_id, year, race_date, location, city, weather_stn_id, races(name)")
+        .eq("id", edition_id)
+        .single()
+        .execute()
+    )
+    if not edition_res.data:
+        raise HTTPException(status_code=404, detail="개최 정보 없음")
 
-    # 1. 지점코드 결정 (시각 기본값 산정에 필요하므로 먼저 처리)
-    if race.get("weather_stn_id"):
-        stn_id = int(race["weather_stn_id"])
+    edition   = edition_res.data
+    race_date = edition.get("race_date")
+    if not race_date:
+        raise HTTPException(status_code=422, detail="대회일 미등록")
+
+    race = edition.get("races") or {}
+
+    if edition.get("weather_stn_id"):
+        stn_id = int(edition["weather_stn_id"])
         method = "manual"
     else:
         stn_id, method = _resolve_stn_with_fallback(
-            race.get("location", ""),
-            race.get("city", ""),
+            edition.get("location", ""),
+            edition.get("city", "") or race.get("city", ""),
         )
-        # 추론 결과를 races 테이블에 저장 (다음 호출 시 재추론 방지)
-        db.table("races").update({"weather_stn_id": stn_id}).eq("id", race_id).execute()
+        db.table("race_editions").update({"weather_stn_id": stn_id}).eq("id", edition_id).execute()
 
-    # 2. 관측 시각 결정
-    # ASOS는 정시(HH:00) 관측 — 서울 07:30 기준 → 07:00, 그 외 08:00
     if hour is not None:
         obs_hour, obs_min = hour, 0
     elif stn_id == 108:
-        obs_hour, obs_min = 7, 0   # 서울 대회 기본 07:00
+        obs_hour, obs_min = 7, 0
     else:
-        obs_hour, obs_min = 8, 0   # 지방 대회 기본 08:00
+        obs_hour, obs_min = 8, 0
 
     dt = datetime.strptime(race_date, "%Y-%m-%d").replace(hour=obs_hour, minute=obs_min)
     tm = dt.strftime("%Y%m%d%H%M")
@@ -165,7 +185,7 @@ def save_race_weather(
         raise HTTPException(status_code=404, detail=f"날씨 데이터 없음 (stn={stn_id}, tm={tm})")
 
     row = {
-        "race_id":           race_id,
+        "race_edition_id":   edition_id,
         "stn_id":            stn_id,
         "temperature":       obs["temperature"],
         "humidity":          obs["humidity"],
@@ -176,17 +196,17 @@ def save_race_weather(
         "raw_data":          obs["raw_data"],
         "fetched_at":        obs["fetched_at"],
     }
-    db.table("race_weather").upsert(row, on_conflict="race_id").execute()
+    db.table("race_weather").upsert(row, on_conflict="race_edition_id").execute()
 
     return {
-        "race_id":    race_id,
-        "race_name":  race.get("name"),
-        "stn_id":     stn_id,
-        "stn_name":   _STN_NAME_MAP.get(stn_id, ""),
-        "stn_method": method,
-        "tm":         tm,
-        "obs_time":   f"{obs_hour:02d}:{obs_min:02d}",
-        "weather":    obs,
+        "race_edition_id": edition_id,
+        "race_name":       race.get("name"),
+        "stn_id":          stn_id,
+        "stn_name":        _STN_NAME_MAP.get(stn_id, ""),
+        "stn_method":      method,
+        "tm":              tm,
+        "obs_time":        f"{obs_hour:02d}:{obs_min:02d}",
+        "weather":         obs,
     }
 
 

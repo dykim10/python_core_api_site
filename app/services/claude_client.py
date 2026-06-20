@@ -2,7 +2,7 @@
 Vision AI 클라이언트 (app/services/claude_client.py)
 
 이미지를 Claude Vision API 에 전달해 텍스트 응답을 받는 공통 유틸.
-모델: claude-opus-4-8 / max_tokens: 1024
+모델: model_config.model_for("parse_image") (티어링 — 기본 경량모델) / max_tokens: 1024
 
 [함수]
   invoke_with_image(image_bytes, media_type, prompt) → str
@@ -17,6 +17,7 @@ from typing import cast
 import anthropic
 from anthropic.types import MessageParam
 from app.core.config import settings
+from app.core.model_config import model_for
 
 
 def invoke_with_image(image_bytes: bytes, media_type: str, prompt: str) -> str:
@@ -24,7 +25,7 @@ def invoke_with_image(image_bytes: bytes, media_type: str, prompt: str) -> str:
     image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     response = client.messages.create(
-        model="claude-opus-4-8",
+        model=model_for("parse_image"),
         max_tokens=1024,
         messages=cast(list[MessageParam], [
             {

@@ -19,11 +19,13 @@ router = APIRouter(prefix="/api/race-plan", tags=["race-plan"])
 
 class GenerateRequest(BaseModel):
     race_edition_id:  int
+    user_id:          int
     course_type:      str  = Field(..., pattern="^(FULL|HALF|10K)$")
     goal_time:        str  = Field(..., pattern=r"^\d{1,2}:\d{2}:\d{2}$")
     training_status:  str  = Field("normal", pattern="^(best|good|normal|poor)$")
     recent_long_km:   float | None = Field(None, ge=1, le=200)
     recent_10k_time:  str | None   = Field(None, pattern=r"^\d{1,2}:\d{2}:\d{2}$")
+    manual_logs:      list[dict] | None = None
     live:             bool = True
 
 
@@ -38,11 +40,13 @@ def generate_plan(req: GenerateRequest):
     try:
         plan = race_plan_service.generate(
             race_edition_id=req.race_edition_id,
+            user_id=req.user_id,
             course_type=req.course_type,
             goal_time=req.goal_time,
             training_status=req.training_status,
             recent_long_km=req.recent_long_km,
             recent_10k_time=req.recent_10k_time,
+            manual_logs=req.manual_logs,
             live=req.live,
         )
     except ValueError as e:

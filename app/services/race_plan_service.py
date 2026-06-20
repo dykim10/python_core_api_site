@@ -17,18 +17,21 @@ Claude API(claude-opus-4-8)로 개인화 레이스 플랜을 생성한다.
   nutrition_plan{}, heart_rate_guide{}, rag_basis{}
 """
 
+import hashlib
 import json
 import logging
+from datetime import date, datetime, timezone
 from typing import Any
 
 import anthropic
 from app.core.config import settings
-from app.core.database import review_db
+from app.core.database import crew_db, review_db
+from app.core.model_config import model_for
 from app.services import rag_service
 
 logger = logging.getLogger(__name__)
 
-MODEL = "claude-opus-4-8"
+MODEL = model_for("race_plan")
 MAX_TOKENS = 4096
 
 COURSE_LABELS = {"FULL": "풀마라톤 (42.195km)", "HALF": "하프마라톤 (21.0975km)", "10K": "10K (10km)"}
@@ -46,7 +49,7 @@ TRAINING_LABELS = {
 def _fetch_race_info(race_edition_id: int, live: bool) -> dict[str, Any]:
     """race_editions + races 조인해 기본 정보 반환."""
     rows = review_db(live).table("race_editions") \
-        .select("id, year, race_date, location, city, race_id, races(name, city, wa_label)") \
+        .select("id, year, race_date, location, city, race_id, weather_stn_id, races(name, city, wa_label)") \
         .eq("id", race_edition_id) \
         .limit(1) \
         .execute().data
@@ -56,25 +59,88 @@ def _fetch_race_info(race_edition_id: int, live: bool) -> dict[str, Any]:
 
 
 def _fetch_weather(race_edition_id: int, live: bool) -> dict[str, Any] | None:
-    """race_weather 에서 해당 에디션 날씨 조회."""
+    """race_weather 에서 해당 edition ASOS 관측값 조회."""
     rows = review_db(live).table("race_weather") \
         .select("temperature, humidity, wind_speed, wind_direction, weather_condition") \
-        .eq("race_id", "race_id") \
-        .limit(1) \
-        .execute().data
-
-    # race_weather는 race_id 기반 — edition의 race_id로 조회해야 함.
-    # edition 정보는 호출자가 미리 가져오므로 별도 파라미터로 받음
-    return rows[0] if rows else None
-
-
-def _fetch_weather_by_race(race_id: int, live: bool) -> dict[str, Any] | None:
-    rows = review_db(live).table("race_weather") \
-        .select("temperature, humidity, wind_speed, wind_direction, weather_condition") \
-        .eq("race_id", race_id) \
+        .eq("race_edition_id", race_edition_id) \
         .limit(1) \
         .execute().data
     return rows[0] if rows else None
+
+
+def _fetch_running_logs(user_id: int, live: bool, limit: int = 20) -> list[dict]:
+    rows = crew_db(live).table("running_logs") \
+        .select("distance_km, duration_seconds, avg_pace_seconds, run_date") \
+        .eq("user_id", user_id) \
+        .order("run_date", desc=True) \
+        .limit(limit) \
+        .execute().data
+    return rows or []
+
+
+def _fetch_forecast_for_edition(edition: dict, live: bool) -> dict:
+    """플랜 생성 시점 KMA 예보/평년값 스냅샷 (별도 테이블 없음)."""
+    race_date = edition.get("race_date")
+    if not race_date:
+        return {"status": "date_unknown", "data": None}
+
+    try:
+        target = date.fromisoformat(str(race_date)[:10])
+    except ValueError:
+        return {"status": "date_unknown", "data": None}
+
+    days_until = (target - date.today()).days
+    stn_id = edition.get("weather_stn_id") or 108
+    fetched_at = datetime.now(timezone.utc).isoformat()
+
+    if days_until <= 3:
+        source = "kma_short"
+        data = {"stn_id": stn_id, "race_date": race_date, "note": "단기예보 API 연동 예정"}
+    elif days_until <= 11:
+        source = "kma_mid"
+        data = {"stn_id": stn_id, "race_date": race_date, "note": "중기예보 API 연동 예정"}
+    else:
+        source = "climatology"
+        data = {"stn_id": stn_id, "race_date": race_date, "note": "평년값 기준 추정"}
+
+    return {
+        "fetched_at": fetched_at,
+        "days_until_race": days_until,
+        "source": source,
+        "data": data,
+    }
+
+
+def _strip_volatile_forecast(forecast: dict | None) -> dict | None:
+    """캐시 키용 — fetched_at 등 매 호출 변하는 필드 제거."""
+    if not forecast:
+        return None
+    return {k: v for k, v in forecast.items() if k not in ("fetched_at",)}
+
+
+def _input_hash(input_snapshot: dict, course_type: str) -> str:
+    payload = json.dumps({**input_snapshot, "course_type": course_type}, sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _find_cached_plan(user_id: int, edition_id: int, cache_key: str, live: bool) -> dict | None:
+    rows = review_db(live).table("race_plans") \
+        .select("plan_json, input") \
+        .eq("user_id", user_id) \
+        .eq("race_edition_id", edition_id) \
+        .order("created_at", desc=True) \
+        .limit(5) \
+        .execute().data
+    for row in rows or []:
+        inp = row.get("input") or {}
+        if isinstance(inp, str):
+            try:
+                inp = json.loads(inp)
+            except json.JSONDecodeError:
+                inp = {}
+        if inp.get("_cache_key") == cache_key:
+            return row
+    return None
 
 
 def _fetch_course(race_edition_id: int, course_type: str, live: bool) -> dict[str, Any] | None:
@@ -171,11 +237,25 @@ def _goal_pace(goal_seconds: int, course_type: str) -> str:
 
 # ── 프롬프트 빌더 ─────────────────────────────────────────────────────────────
 
+def _running_logs_text(logs: list[dict]) -> str:
+    if not logs:
+        return "훈련 데이터 없음 — 보수적 페이스 권장"
+    lines = []
+    for i, log in enumerate(logs[:10], 1):
+        dist = log.get("distance_km")
+        pace = log.get("avg_pace_seconds") or log.get("duration_seconds")
+        when = log.get("run_date", "")
+        lines.append(f"  {i}. {when} — {dist}km ({pace})")
+    return "\n".join(lines)
+
+
 def _build_prompt(
     race_info: dict,
     weather: dict | None,
+    weather_forecast: dict | None,
     course: dict | None,
     rag_cases: list[dict],
+    running_logs: list[dict],
     course_type: str,
     goal_time: str,
     recent_long_km: float | None,
@@ -247,8 +327,11 @@ def _build_prompt(
 - 장소: {location}
 {f'- 세계육상연맹 인증: {wa_label}' if wa_label else ''}
 
-## 날씨 조건
+## 날씨 조건 (과거 ASOS)
 {_weather_text(weather)}
+
+## 날씨 예보 스냅샷
+{json.dumps(weather_forecast or {}, ensure_ascii=False)}
 
 ## 코스 특성
 {_course_text(course)}
@@ -258,6 +341,9 @@ def _build_prompt(
 - 훈련 상태: {TRAINING_LABELS.get(training_status, training_status)}
 {f'- 최근 최장 거리 훈련: {recent_long_km}km' if recent_long_km else ''}
 {f'- 최근 10km 기록: {recent_10k_time}' if recent_10k_time else ''}
+
+## 최근 훈련 기록 (CREW)
+{_running_logs_text(running_logs)}
 
 ## 유사 조건 완주자 데이터 (RAG)
 {_rag_cases_text(rag_cases)}
@@ -273,44 +359,60 @@ pace_plan은 5km 단위 구간으로 구성하되, 코스 특성상 중요 변�
 
 def generate(
     race_edition_id: int,
+    user_id: int,
     course_type: str,
     goal_time: str,
     training_status: str = "normal",
     recent_long_km: float | None = None,
     recent_10k_time: str | None = None,
+    manual_logs: list[dict] | None = None,
     live: bool = True,
 ) -> dict[str, Any]:
     """
-    레이스 플랜 생성.
-
-    1. DB에서 대회·날씨·코스 정보 수집
-    2. RAG로 유사 케이스 검색
-    3. Claude claude-opus-4-8 에 프롬프트 전달
-    4. JSON 응답 파싱 후 반환
+    레이스 플랜 생성 — input 스냅샷 박제 후 review.race_plans INSERT.
     """
-    logger.info(f"[RacePlan] 생성 시작 edition={race_edition_id} type={course_type} goal={goal_time}")
+    logger.info(f"[RacePlan] 생성 시작 edition={race_edition_id} user={user_id} type={course_type}")
 
-    # 1. 대회 정보
     race_info = _fetch_race_info(race_edition_id, live)
-    race_id   = race_info.get("race_id")
-
-    # 2. 날씨
-    weather = _fetch_weather_by_race(race_id, live) if race_id else None
-
-    # 3. 코스
+    weather_obs = _fetch_weather(race_edition_id, live)
+    weather_forecast = _fetch_forecast_for_edition(race_info, live)
     course = _fetch_course(race_edition_id, course_type, live)
 
-    # 4. RAG 유사 케이스
+    running_logs = _fetch_running_logs(user_id, live)
+    if not running_logs and manual_logs:
+        running_logs = manual_logs
+
+    input_snapshot: dict[str, Any] = {
+        "goal_time": goal_time,
+        "recent_time": recent_10k_time,
+        "training_state": training_status,
+        "running_logs": running_logs,
+        "weather_observed": weather_obs,
+        "weather_forecast": _strip_volatile_forecast(weather_forecast),
+    }
+
+    cache_key = _input_hash(input_snapshot, course_type)
+    input_snapshot["_cache_key"] = cache_key
+    input_snapshot["generated_at"] = datetime.now(timezone.utc).isoformat()
+
+    cached = _find_cached_plan(user_id, race_edition_id, cache_key, live)
+    if cached:
+        logger.info(f"[RacePlan] 캐시 hit edition={race_edition_id}")
+        plan = cached["plan_json"]
+        if isinstance(plan, str):
+            plan = json.loads(plan)
+        return plan
+
     rag_cases: list[dict] = []
     try:
-        race  = race_info.get("races") or {}
+        race = race_info.get("races") or {}
         query_text = rag_service.build_case_text(
             race_name=race.get("name", "마라톤"),
             year=race_info.get("year"),
             course_type=course_type,
-            temperature=weather.get("temperature") if weather else None,
-            humidity=weather.get("humidity") if weather else None,
-            wind_speed=weather.get("wind_speed") if weather else None,
+            temperature=weather_obs.get("temperature") if weather_obs else None,
+            humidity=weather_obs.get("humidity") if weather_obs else None,
+            wind_speed=weather_obs.get("wind_speed") if weather_obs else None,
             finish_time_seconds=None,
         )
         embedding = rag_service.generate_embedding(query_text)
@@ -318,12 +420,13 @@ def generate(
     except Exception as e:
         logger.warning(f"[RacePlan] RAG 검색 실패 (무시): {e}")
 
-    # 5. 프롬프트 구성
     system_prompt, user_prompt = _build_prompt(
         race_info=race_info,
-        weather=weather,
+        weather=weather_obs,
+        weather_forecast=weather_forecast,
         course=course,
         rag_cases=rag_cases,
+        running_logs=running_logs,
         course_type=course_type,
         goal_time=goal_time,
         recent_long_km=recent_long_km,
@@ -331,7 +434,6 @@ def generate(
         training_status=training_status,
     )
 
-    # 6. Claude 호출
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     response = client.messages.create(
         model=MODEL,
@@ -346,9 +448,7 @@ def generate(
             raw_text = block.text
             break
 
-    # 7. JSON 파싱
     try:
-        # Claude가 ```json ... ``` 래핑을 붙이는 경우 제거
         text = raw_text.strip()
         if text.startswith("```"):
             text = text.split("```", 2)[1]
@@ -361,17 +461,25 @@ def generate(
         logger.error(f"[RacePlan] JSON 파싱 실패: {e}\n응답: {raw_text[:500]}")
         raise ValueError(f"레이스 플랜 파싱 실패: {e}")
 
-    # 8. 메타데이터 추가
     plan["_meta"] = {
         "race_edition_id": race_edition_id,
-        "course_type":      course_type,
-        "goal_time":        goal_time,
-        "training_status":  training_status,
-        "rag_cases_found":  len(rag_cases),
-        "has_weather":      weather is not None,
-        "has_course":       course is not None,
-        "model":            MODEL,
+        "user_id": user_id,
+        "course_type": course_type,
+        "goal_time": goal_time,
+        "training_status": training_status,
+        "rag_cases_found": len(rag_cases),
+        "has_weather": weather_obs is not None,
+        "has_course": course is not None,
+        "model": MODEL,
+        "cache_key": cache_key,
     }
+
+    review_db(live).table("race_plans").insert({
+        "user_id": user_id,
+        "race_edition_id": race_edition_id,
+        "input": input_snapshot,
+        "plan_json": plan,
+    }).execute()
 
     logger.info(f"[RacePlan] 생성 완료 edition={race_edition_id}")
     return plan

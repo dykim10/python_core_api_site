@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import anthropic
 from app.core.config import settings
+from app.core.model_config import model_for
 
 router = APIRouter(prefix="/api", tags=["summarize"])
 
@@ -51,7 +52,7 @@ def summarize_review(req: SummarizeRequest):
 
     try:
         response = client.messages.create(
-            model="claude-opus-4-8",
+            model=model_for("review_summarize"),
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}],
         )

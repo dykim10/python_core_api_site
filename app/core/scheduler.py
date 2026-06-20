@@ -84,11 +84,25 @@ def _weekly_mailing_job() -> None:
         logger.error(f"[스케줄] 주간 뉴스레터 실패: {result.get('reason')}")
 
 
+def _race_summary_batch_job() -> None:
+    from app.services.race_summary_batch import batch_pending_race_summaries
+    logger.info("[스케줄] 대회 종합 AI 요약 배치 시작")
+    result = batch_pending_race_summaries(live=True)
+    logger.info(f"[스케줄] 대회 종합 AI 요약 배치 완료: {result}")
+
+
 def start() -> None:
     scheduler.add_job(
         _backup_job,
         CronTrigger(hour=0, minute=0, timezone="Asia/Seoul"),
         id="daily_backup",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _race_summary_batch_job,
+        CronTrigger(hour=3, minute=0, timezone="Asia/Seoul"),
+        id="batch_race_summaries",
         replace_existing=True,
         misfire_grace_time=3600,
     )
@@ -126,6 +140,7 @@ def start() -> None:
     logger.info(
         "[스케줄러] 시작 — "
         "daily_backup 매일 00:00 KST / "
+        "batch_race_summaries 매일 03:00 KST / "
         "wa_label_sync 매년 12/1 02:00 KST / "
         "weekly_crew_mailing 매주 월요일 06:00 KST"
     )

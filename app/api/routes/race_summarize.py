@@ -28,6 +28,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import anthropic
 from app.core.config import settings
+from app.core.model_config import model_for
 
 router = APIRouter(prefix="/api/races", tags=["race-summarize"])
 
@@ -76,7 +77,7 @@ positives/negatives는 실제 후기에 언급된 내용만 포함하고, 없으
 
     try:
         response = client.messages.create(
-            model="claude-opus-4-8",
+            model=model_for("race_summarize"),
             max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
