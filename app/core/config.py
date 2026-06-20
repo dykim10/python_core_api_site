@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     mail_from_name: str = "PAC-RUN"
     mailing_test_email: str = ""  # 설정 시 서버 시작 90분 후 테스트 발송
 
+    # World Athletics GraphQL (Next.js 클라이언트 공개 키 — env로 override 가능)
+    wa_graphql_api_key: str = "da2-jkcja3ykujbf3cz64fs7w5gl6m"
+
     class Config:
         env_file = ".env"
         extra = "ignore"

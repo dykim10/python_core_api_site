@@ -654,15 +654,57 @@ def crawl_all(limit: int = 30) -> list[dict]:
     return _dedup_races(mg_races, rr_races)
 
 
-# ── World Athletics Label Road Races (Wikipedia) ──────────────────────────────
+# ── World Athletics Label Road Races (공식 GraphQL) ───────────────────────────
+
+_WA_EDITION_PREFIX = re.compile(r"^\d+\.\s*")
+
+
+def map_wa_label(
+    ranking_category: Optional[str],
+    competition_subgroup: Optional[str],
+) -> str:
+    """competitionSubgroup 우선, rankingCategory 보조."""
+    subgroup = (competition_subgroup or "").strip().lower()
+    if "platinum" in subgroup:
+        return "platinum"
+    if subgroup == "gold":
+        return "gold"
+    if subgroup == "elite":
+        return "elite"
+    if subgroup in ("label", "silver", "bronze"):
+        return "label"
+
+    cat = (ranking_category or "").strip().upper()
+    if cat in ("GW", "GL"):
+        return "platinum"
+    if cat in ("A", "B"):
+        return "gold"
+    if cat == "C":
+        return "elite"
+    return "label"
+
+
+def parse_wa_venue(venue: str) -> tuple[str, str]:
+    """'Schwäbisch Hall (GER)' → (city, ISO3 country code)."""
+    if not venue:
+        return "", ""
+    m = re.match(r"^(.+?)\s*\(([A-Za-z]{3})\)\s*$", venue.strip())
+    if m:
+        return m.group(1).strip(), m.group(2).upper()
+    return venue.strip(), ""
+
+
+def normalize_wa_name_en(name: str) -> str:
+    """회차 접두사 제거 — 마스터 매칭용."""
+    return _WA_EDITION_PREFIX.sub("", (name or "").strip())
+
 
 def parse_wa_race_date(date_str: str, year: int) -> Optional[str]:
-    """Wikipedia WA 라벨 날짜 문자열을 ISO 날짜로 변환.
-    예: '17 Mar', '7 Apr' + year=2024 → '2024-03-17'
-    """
+    """WA 날짜 문자열 → ISO. GraphQL startDate 또는 Wikipedia '17 Mar' 형식."""
     if not date_str:
         return None
-    # "17 Mar–19 Mar" 같은 범위 표기는 시작일만 사용
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", date_str.strip()):
+        return date_str.strip()
     date_str = date_str.split("–")[0].split("-")[0].strip()
     for fmt in ("%d %b %Y", "%d %B %Y"):
         try:
@@ -672,101 +714,82 @@ def parse_wa_race_date(date_str: str, year: int) -> Optional[str]:
     return None
 
 
-def _wa_label_from_text(text: str) -> Optional[str]:
-    """텍스트에서 WA 라벨 등급 추출. 대소문자 무관."""
-    t = text.lower()
-    if "platinum" in t:
-        return "platinum"
-    if "gold" in t:
-        return "gold"
-    if "elite" in t:
-        return "elite"
-    if "label" in t:
-        return "label"
-    return None
+def _wa_event_to_dict(
+    event: dict,
+    *,
+    season: int,
+    organiser: Optional[dict] = None,
+) -> dict:
+    venue = event.get("venue") or ""
+    city, country_code = parse_wa_venue(venue)
+    if not country_code:
+        country_code = (event.get("country") or "").upper()
+
+    name_raw = (event.get("name") or "").strip()
+    name_en = normalize_wa_name_en(name_raw)
+    comp_id = event.get("id")
+    start_date = event.get("startDate") or ""
+
+    from app.services.wa_graphql import result_page_url
+
+    row: dict = {
+        "wa_competition_id": comp_id,
+        "date": event.get("dateRange") or start_date,
+        "name": name_raw,
+        "name_en": name_en,
+        "city": city,
+        "country": country_code,
+        "venue": venue,
+        "location": venue,
+        "race_date": start_date or None,
+        "year": int(start_date[:4]) if start_date and len(start_date) >= 4 else season,
+        "wa_label": map_wa_label(
+            event.get("rankingCategory"),
+            event.get("competitionSubgroup"),
+        ),
+        "ranking_category": event.get("rankingCategory"),
+        "competition_subgroup": event.get("competitionSubgroup"),
+        "source": "world_athletics",
+        "source_url": result_page_url(comp_id) if comp_id else "",
+    }
+
+    if organiser:
+        row["website_url"] = organiser.get("websiteUrl") or organiser.get("resultsPageUrl")
+        row["official_url"] = organiser.get("websiteUrl") or organiser.get("resultsPageUrl")
+        contacts = organiser.get("contactPersons") or []
+        if contacts:
+            row["organizer"] = contacts[0].get("name") or ""
+
+    return row
 
 
-def crawl_wa_label_races(year: int) -> list[dict]:
-    """Wikipedia에서 WA Label Road Races 목록을 파싱해 반환한다.
+def crawl_wa_label_races(year: int, *, fetch_organiser: bool = False) -> list[dict]:
+    """World Athletics Label Road Races 캘린더를 GraphQL로 수집한다.
 
-    URL: https://en.wikipedia.org/wiki/{year}_World_Athletics_Label_Road_Races
-    라이선스: CC BY-SA (상업적 이용 가능)
-    반환 필드: date, name, city, country, wa_label, source, source_url
+    URL: https://worldathletics.org/competitions/world-athletics-label-road-races/calendar-results
+    API: getMinisiteCalendarEvents (competitionGroupId=3775, season=year)
+    반환 필드: wa_competition_id, date, name, name_en, city, country, wa_label,
+               race_date, year, source, source_url, (+ official_url/organizer)
 
-    [페이지 구조]
-    단일 wikitable 안에서 라벨 구분 행(colspan 셀)이 구간을 나눈다.
-      Platinum(16)  ← 셀이 1개인 구분 행
-      7 Jan | Marathon X | City | Country  ← 대회 행
-      ...
-      Gold(45)      ← 다음 구분 행
-      ...
+    fetch_organiser=True 이면 hasCompetitionInformation 이벤트에
+    getCompetitionOrganiserInfo 추가 호출 (주최자·공식 URL).
     """
-    url = f"https://en.wikipedia.org/wiki/{year}_World_Athletics_Label_Road_Races"
+    from app.services.wa_graphql import fetch_minisite_calendar, fetch_organiser_info
+
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=20)
-        resp.raise_for_status()
+        events = fetch_minisite_calendar(year)
     except Exception as e:
-        logger.error(f"Wikipedia WA 라벨 페이지 fetch 실패 ({year}): {e}")
-        return []
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    tables = soup.find_all("table", class_="wikitable")
-
-    if not tables:
-        logger.warning(f"Wikipedia WA 라벨 ({year}): wikitable 없음 — 페이지 구조 변경 가능성")
+        logger.error("WA GraphQL calendar fetch failed (%s): %s", year, e)
         return []
 
     races: list[dict] = []
-    for table in tables:
-        rows = table.find_all("tr")
-        if not rows:
-            continue
+    for event in events:
+        organiser = None
+        if fetch_organiser and event.get("hasCompetitionInformation") and event.get("id"):
+            organiser = fetch_organiser_info(int(event["id"]))
+        races.append(_wa_event_to_dict(event, season=year, organiser=organiser))
 
-        # 헤더 행의 컬럼 인덱스 동적 파악 (연도별 컬럼 순서 변경 대응)
-        header_row = rows[0]
-        headers = [th.get_text(strip=True).lower() for th in header_row.find_all(["th", "td"])]
-
-        col_date    = next((i for i, h in enumerate(headers) if "date" in h), 0)
-        col_name    = next((i for i, h in enumerate(headers) if "meeting" in h or "race" in h or "event" in h or "name" in h), 1)
-        col_city    = next((i for i, h in enumerate(headers) if "venue" in h or "city" in h or "location" in h), 2)
-        col_country = next((i for i, h in enumerate(headers) if "country" in h or "nation" in h), 3)
-
-        current_label: Optional[str] = None
-
-        for row in rows[1:]:
-            cells = row.find_all(["td", "th"])
-
-            # colspan 구분 행 — 라벨 등급 전환
-            if len(cells) == 1:
-                label = _wa_label_from_text(cells[0].get_text(strip=True))
-                if label:
-                    current_label = label
-                continue
-
-            if len(cells) < 2:
-                continue
-
-            def _cell(idx: int) -> str:
-                if idx < len(cells):
-                    return cells[idx].get_text(separator=" ", strip=True)
-                return ""
-
-            # 각주([1], [2]) 제거
-            name = re.sub(r"\[\d+\]", "", _cell(col_name)).strip()
-            if not name:
-                continue
-
-            races.append({
-                "date":       re.sub(r"\[\d+\]", "", _cell(col_date)).strip(),
-                "name":       name,
-                "city":       re.sub(r"\[\d+\]", "", _cell(col_city)).strip(),
-                "country":    re.sub(r"\[\d+\]", "", _cell(col_country)).strip(),
-                "wa_label":   current_label,
-                "source":     "world_athletics",
-                "source_url": url,
-            })
-
-    logger.info(f"Wikipedia WA 라벨 ({year}): {len(races)}건 수집")
+    logger.info("WA Label Road Races (%s): %d events", year, len(races))
     return races
 
 
@@ -822,7 +845,7 @@ def translate_race_names_to_korean(races: list[dict], batch_size: int = 50) -> l
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
     names_ko_all: list[str] = []
-    names_en_all = [r["name"] for r in races]
+    names_en_all = [r.get("name_en") or r.get("name") or "" for r in races]
 
     for i in range(0, len(names_en_all), batch_size):
         batch = names_en_all[i: i + batch_size]
@@ -830,7 +853,8 @@ def translate_race_names_to_korean(races: list[dict], batch_size: int = 50) -> l
         logger.info(f"WA 번역 진행: {min(i + batch_size, len(races))}/{len(races)}")
 
     for i, race in enumerate(races):
-        race["name_en"] = race["name"]
-        race["name"]    = names_ko_all[i]
+        if not race.get("name_en"):
+            race["name_en"] = names_en_all[i]
+        race["name"] = names_ko_all[i]
 
     return races

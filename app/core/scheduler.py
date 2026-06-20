@@ -31,47 +31,29 @@ def _backup_job() -> None:
 
 def _wa_sync_job() -> None:
     from datetime import datetime
-    from app.services.race_crawler import crawl_wa_label_races, parse_wa_race_date
-    from app.core.database import review_db
+    from app.services.wa_sync_service import sync_wa_label_races
 
-    next_year = datetime.now().year + 1  # 12월 발표 기준 → 다음 해 대회 목록
+    next_year = datetime.now().year + 1
     logger.info(f"[스케줄] WA 라벨 대회 갱신 시작 — {next_year}년")
 
-    races = crawl_wa_label_races(next_year)
-    if not races:
-        logger.warning(f"[스케줄] WA 라벨 대회 없음 — {next_year}년 (Wikipedia 페이지 미생성 가능)")
+    result = sync_wa_label_races(
+        next_year,
+        translate=True,
+        fetch_organiser=False,
+    )
+    if result["total"] == 0:
+        logger.warning(f"[스케줄] WA 라벨 대회 없음 — {next_year}년")
         return
 
-    existing_res = review_db().table("races").select("id,name,wa_label").execute()
-    existing_by_name = {r["name"].lower(): r for r in (existing_res.data or [])}
-
-    inserted = updated = skipped = 0
-    for race in races:
-        cert_payload = {
-            "wa_label":     race["wa_label"],
-            "is_certified": True,
-            "source":       "world_athletics",
-            "source_url":   race.get("source_url", ""),
-        }
-        existing = existing_by_name.get(race["name"].lower())
-        if existing:
-            if existing.get("wa_label") == race["wa_label"]:
-                skipped += 1
-                continue
-            review_db().table("races").update(cert_payload).eq("id", existing["id"]).execute()
-            updated += 1
-        else:
-            review_db().table("races").insert({
-                "name":      race["name"],
-                "city":      race.get("city", ""),
-                "race_date": parse_wa_race_date(race.get("date", ""), next_year),
-                "is_active": True,
-                "status":    "active",
-                **cert_payload,
-            }).execute()
-            inserted += 1
-
-    logger.info(f"[스케줄] WA 라벨 갱신 완료 — {next_year}년: 신규 {inserted} / 갱신 {updated} / 동일 {skipped}")
+    logger.info(
+        "[스케줄] WA 라벨 갱신 완료 — %s년: races +%d/~%d editions +%d/~%d skipped %d",
+        next_year,
+        result["races_inserted"],
+        result["races_updated"],
+        result["editions_inserted"],
+        result["editions_updated"],
+        result["skipped"],
+    )
 
 
 def _weekly_mailing_job() -> None:
