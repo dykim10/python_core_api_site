@@ -25,6 +25,8 @@ from app.services.race_crawler import crawl_wa_label_races, translate_race_names
 
 logger = logging.getLogger(__name__)
 
+_INSERT_CHUNK = 50
+
 _ISO3_COUNTRY: dict[str, str] = {
     "KOR": "대한민국",
     "JPN": "일본",
@@ -166,6 +168,7 @@ def sync_wa_label_races(
 
     inserted = updated = decertified = skipped = 0
     synced_keys: set[str] = set()
+    pending_inserts: list[dict[str, Any]] = []
 
     for race in wa_races:
         name_en = (race.get("name_en") or race.get("name") or "").strip()
@@ -205,14 +208,23 @@ def sync_wa_label_races(
             existing_race.update(race_payload)
             updated += 1
         else:
-            ins = db.table("races").insert(race_payload).execute()
-            if ins.data:
-                row = ins.data[0]
-                races_by_name_en[key] = row
-                all_rows.append(row)
-                inserted += 1
-            else:
-                skipped += 1
+            pending_inserts.append(race_payload)
+
+    for i in range(0, len(pending_inserts), _INSERT_CHUNK):
+        chunk = pending_inserts[i : i + _INSERT_CHUNK]
+        try:
+            ins = db.table("races").insert(chunk).execute()
+            rows = ins.data or []
+            for row in rows:
+                row_key = _race_name_key(row)
+                if row_key:
+                    races_by_name_en[row_key] = row
+                    all_rows.append(row)
+            inserted += len(rows)
+            skipped += len(chunk) - len(rows)
+        except Exception as e:
+            logger.error("WA sync batch insert failed (chunk %d): %s", i // _INSERT_CHUNK, e)
+            skipped += len(chunk)
 
     # 시즌 Y 목록에 없는 WA 추적 대회 → 해당 시즌 비공인 처리
     for row in all_rows:

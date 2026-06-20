@@ -41,8 +41,8 @@ def get_races(limit: int = 20):
 @router.post("/sync", response_model=dict)
 def sync_wa_label_races_endpoint(
     year: int = 0,
-    translate: bool = True,
-    organiser: bool = True,
+    translate: bool = False,
+    organiser: bool = False,
 ):
     """WA 시즌 Label Road Races → races upsert + 연도별 공인/비공인 (editions 없음)."""
     target_year = year if year > 0 else datetime.now().year
