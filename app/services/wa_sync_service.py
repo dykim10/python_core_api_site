@@ -1,18 +1,5 @@
 """
 World Athletics Label Road Races → review.races 마스터 카탈로그 sync.
-
-정합성 원칙 (2026-06-20 확정):
-  - 소스: World Athletics 공식 GraphQL (Wikipedia 폐기)
-  - races 마스터만 — race_editions 미생성 (TASK-REMODEL-02)
-  - wa_calendar[season]: 연도별 Label Road Races 등재 이력
-  - season sync 1회 = 해당 시즌 공인 목록 기준 upsert + 미등재 대회 delist
-
-공인 판정 (시즌 Y sync 후):
-  - Y 목록에 있음     → wa_calendar[Y].listed=true,  is_certified=true,  wa_label 설정
-  - Y 목록에 없음     → wa_calendar[Y].listed=false, is_certified=false, wa_label=null
-    (과거 wa_calendar[Y-1].listed=true 는 이력으로 유지 → UI "24 공인 / 25 비공인")
-  - Y에만 신규        → insert (신규 공인 대회)
-  - 국내 is_domestic=true 카탈로그는 sync 대상 제외
 """
 from __future__ import annotations
 
@@ -22,6 +9,7 @@ from typing import Any
 
 from app.core.database import review_db
 from app.services.race_crawler import crawl_wa_label_races, translate_race_names_to_korean
+from app.services.wa_sync_session import WaSyncCancelled, WaSyncSession, open_session
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +76,6 @@ def _now_iso() -> str:
 
 
 def _calendar_entry_listed(race: dict, sync_year: int) -> dict[str, Any]:
-    """시즌 Label Road Races 등재 — listed=true."""
     return {
         "listed": True,
         "start_date": race.get("race_date"),
@@ -103,7 +90,6 @@ def _calendar_entry_listed(race: dict, sync_year: int) -> dict[str, Any]:
 
 
 def _calendar_entry_delisted(sync_year: int) -> dict[str, Any]:
-    """해당 시즌 Label Road Races 목록 미등재 — listed=false."""
     return {
         "listed": False,
         "synced_at": _now_iso(),
@@ -122,7 +108,6 @@ def _race_name_key(row: dict) -> str:
 
 
 def _is_wa_certification_target(row: dict) -> bool:
-    """국내 카탈로그 제외 — WA 공인 갱신 대상만."""
     if row.get("is_domestic"):
         return False
     cal = row.get("wa_calendar") or {}
@@ -134,132 +119,182 @@ def _is_wa_certification_target(row: dict) -> bool:
 def sync_wa_label_races(
     year: int,
     *,
-    translate: bool = True,
-    fetch_organiser: bool = True,
+    translate: bool = False,
+    fetch_organiser: bool = False,
     live: bool = False,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """WA 시즌 Y Label Road Races → races upsert + 연도별 공인/비공인 갱신."""
-    wa_races = crawl_wa_label_races(year, fetch_organiser=fetch_organiser)
-    if not wa_races:
-        return {
-            "year": year,
-            "total": 0,
-            "inserted": 0,
-            "updated": 0,
-            "decertified": 0,
-            "skipped": 0,
-        }
-
-    if translate:
-        wa_races = translate_race_names_to_korean(wa_races)
+    session: WaSyncSession | None = None
+    if session_id:
+        session = open_session(session_id, year)
+        cancel_check = session.check_cancel
+    else:
+        cancel_check = None
 
     db = review_db(live)
 
-    races_res = db.table("races").select(
-        "id,name,name_en,wa_label,is_certified,is_domestic,wa_calendar"
-    ).execute()
-    all_rows = races_res.data or []
-
-    races_by_name_en: dict[str, dict] = {}
-    for row in all_rows:
-        key = _race_name_key(row)
-        if key:
-            races_by_name_en[key] = row
-
-    inserted = updated = decertified = skipped = 0
-    synced_keys: set[str] = set()
-    pending_inserts: list[dict[str, Any]] = []
-
-    for race in wa_races:
-        name_en = (race.get("name_en") or race.get("name") or "").strip()
-        key = name_en.lower()
-        if not key:
-            skipped += 1
-            continue
-
-        synced_keys.add(key)
-        existing_race = races_by_name_en.get(key)
-        cal_entry = _calendar_entry_listed(race, year)
-
-        race_payload: dict[str, Any] = {
-            "name": race.get("name") or name_en,
-            "name_en": name_en,
-            "city": race.get("city") or "",
-            "country": country_name(race.get("country", "")),
-            "wa_label": race.get("wa_label"),
-            "is_certified": True,
-            "is_domestic": False,
-            "is_active": True,
-            "wa_calendar": _merge_wa_calendar(
-                existing_race.get("wa_calendar") if existing_race else {},
-                year,
-                cal_entry,
-            ),
-        }
-        if race.get("official_url"):
-            race_payload["official_url"] = race["official_url"]
-        if race.get("website_url"):
-            race_payload["website_url"] = race["website_url"]
-        if race.get("organizer"):
-            race_payload["organizer"] = race["organizer"]
-
-        if existing_race:
-            db.table("races").update(race_payload).eq("id", existing_race["id"]).execute()
-            existing_race.update(race_payload)
-            updated += 1
-        else:
-            pending_inserts.append(race_payload)
-
-    for i in range(0, len(pending_inserts), _INSERT_CHUNK):
-        chunk = pending_inserts[i : i + _INSERT_CHUNK]
-        try:
-            ins = db.table("races").insert(chunk).execute()
-            rows = ins.data or []
-            for row in rows:
-                row_key = _race_name_key(row)
-                if row_key:
-                    races_by_name_en[row_key] = row
-                    all_rows.append(row)
-            inserted += len(rows)
-            skipped += len(chunk) - len(rows)
-        except Exception as e:
-            logger.error("WA sync batch insert failed (chunk %d): %s", i // _INSERT_CHUNK, e)
-            skipped += len(chunk)
-
-    # 시즌 Y 목록에 없는 WA 추적 대회 → 해당 시즌 비공인 처리
-    for row in all_rows:
-        if not _is_wa_certification_target(row):
-            continue
-        key = _race_name_key(row)
-        if not key or key in synced_keys:
-            continue
-
-        new_cal = _merge_wa_calendar(
-            row.get("wa_calendar"),
+    try:
+        wa_races = crawl_wa_label_races(
             year,
-            _calendar_entry_delisted(year),
+            fetch_organiser=fetch_organiser,
+            cancel_check=cancel_check,
         )
-        db.table("races").update({
-            "wa_calendar": new_cal,
-            "is_certified": False,
-            "wa_label": None,
-        }).eq("id", row["id"]).execute()
-        decertified += 1
+        if not wa_races:
+            if session:
+                session.mark_done()
+            return {
+                "year": year,
+                "total": 0,
+                "inserted": 0,
+                "updated": 0,
+                "decertified": 0,
+                "skipped": 0,
+            }
 
-    logger.info(
-        "WA sync season=%s: inserted=%d updated=%d decertified=%d skipped=%d",
-        year,
-        inserted,
-        updated,
-        decertified,
-        skipped,
-    )
+        if cancel_check:
+            cancel_check()
 
-    return {
-        "year": year,
-        "total": len(wa_races),
-        "inserted": inserted,
-        "updated": updated,
-        "decertified": decertified,
-        "skipped": skipped,
-    }
+        if translate:
+            wa_races = translate_race_names_to_korean(
+                wa_races,
+                cancel_check=cancel_check,
+            )
+
+        if cancel_check:
+            cancel_check()
+
+        races_res = db.table("races").select(
+            "id,name,name_en,wa_label,is_certified,is_domestic,wa_calendar,"
+            "city,country,is_active,official_url,website_url,organizer"
+        ).execute()
+        all_rows = races_res.data or []
+
+        races_by_name_en: dict[str, dict] = {}
+        for row in all_rows:
+            key = _race_name_key(row)
+            if key:
+                races_by_name_en[key] = row
+
+        inserted = updated = decertified = skipped = 0
+        synced_keys: set[str] = set()
+        pending_inserts: list[dict[str, Any]] = []
+
+        for race in wa_races:
+            if cancel_check:
+                cancel_check()
+
+            name_en = (race.get("name_en") or race.get("name") or "").strip()
+            key = name_en.lower()
+            if not key:
+                skipped += 1
+                continue
+
+            synced_keys.add(key)
+            existing_race = races_by_name_en.get(key)
+            cal_entry = _calendar_entry_listed(race, year)
+
+            race_payload: dict[str, Any] = {
+                "name": race.get("name") or name_en,
+                "name_en": name_en,
+                "city": race.get("city") or "",
+                "country": country_name(race.get("country", "")),
+                "wa_label": race.get("wa_label"),
+                "is_certified": True,
+                "is_domestic": False,
+                "is_active": True,
+                "wa_calendar": _merge_wa_calendar(
+                    existing_race.get("wa_calendar") if existing_race else {},
+                    year,
+                    cal_entry,
+                ),
+            }
+            if race.get("official_url"):
+                race_payload["official_url"] = race["official_url"]
+            if race.get("website_url"):
+                race_payload["website_url"] = race["website_url"]
+            if race.get("organizer"):
+                race_payload["organizer"] = race["organizer"]
+
+            if existing_race:
+                if session:
+                    session.record_update_before(int(existing_race["id"]), existing_race)
+                db.table("races").update(race_payload).eq("id", existing_race["id"]).execute()
+                existing_race.update(race_payload)
+                updated += 1
+            else:
+                pending_inserts.append(race_payload)
+
+        for i in range(0, len(pending_inserts), _INSERT_CHUNK):
+            if cancel_check:
+                cancel_check()
+            chunk = pending_inserts[i : i + _INSERT_CHUNK]
+            try:
+                ins = db.table("races").insert(chunk).execute()
+                rows = ins.data or []
+                if session and rows:
+                    session.record_inserts(rows)
+                for row in rows:
+                    row_key = _race_name_key(row)
+                    if row_key:
+                        races_by_name_en[row_key] = row
+                        all_rows.append(row)
+                inserted += len(rows)
+                skipped += len(chunk) - len(rows)
+            except Exception as e:
+                logger.error("WA sync batch insert failed (chunk %d): %s", i // _INSERT_CHUNK, e)
+                skipped += len(chunk)
+
+        for row in all_rows:
+            if cancel_check:
+                cancel_check()
+            if not _is_wa_certification_target(row):
+                continue
+            key = _race_name_key(row)
+            if not key or key in synced_keys:
+                continue
+
+            if session:
+                session.record_decertify_before(int(row["id"]), row)
+
+            new_cal = _merge_wa_calendar(
+                row.get("wa_calendar"),
+                year,
+                _calendar_entry_delisted(year),
+            )
+            db.table("races").update({
+                "wa_calendar": new_cal,
+                "is_certified": False,
+                "wa_label": None,
+            }).eq("id", row["id"]).execute()
+            decertified += 1
+
+        logger.info(
+            "WA sync season=%s: inserted=%d updated=%d decertified=%d skipped=%d",
+            year,
+            inserted,
+            updated,
+            decertified,
+            skipped,
+        )
+
+        if session:
+            session.mark_done()
+
+        return {
+            "year": year,
+            "status": "done",
+            "total": len(wa_races),
+            "inserted": inserted,
+            "updated": updated,
+            "decertified": decertified,
+            "skipped": skipped,
+        }
+
+    except WaSyncCancelled as e:
+        return {
+            "year": year,
+            "status": "cancelled",
+            "session_id": session_id,
+            **e.rollback,
+        }

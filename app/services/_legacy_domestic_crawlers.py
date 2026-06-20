@@ -1,0 +1,511 @@
+"""
+레거시 국내 크롤러 (marathongo.co.kr / roadrun.or.kr) — 2026-06 사용 중단.
+
+참고용 보관. 운영 코드에서는 import하지 않음.
+"""
+import re
+import json
+import logging
+import time
+import urllib3
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urljoin
+
+import requests
+from bs4 import BeautifulSoup, Comment
+from typing import Optional
+from datetime import date
+
+from app.services.race_crawler import (
+    HEADERS,
+    _compute_status,
+    _get_next_data,
+    _normalize_distances,
+    _parse_date,
+    _parse_won,
+)
+
+logger = logging.getLogger(__name__)
+
+MARATHONGO_BASE = "https://www.marathongo.co.kr"
+ROADRUN_BASE = "http://www.roadrun.co.kr"
+
+# ── marathongo.co.kr ──────────────────────────────────────────────────────────
+
+def _marathongo_from_next_data(page_props: dict) -> dict:
+    r = (
+        page_props.get("raceDetail")
+        or page_props.get("race")
+        or page_props.get("raceInfo")
+        or {}
+    )
+
+    race_type_raw = r.get("raceTypeList") or ""
+    distances = _normalize_distances(race_type_raw)
+
+    intro = r.get("intro") or ""
+    fee_m = re.search(r"참가비\s*(\d{1,3}(?:,\d{3})*)\s*원", intro)
+    if not fee_m:
+        fee_m = re.search(r"(\d{1,3}(?:,\d{3})+)\s*원", intro)
+    entry_fee = _parse_won(fee_m.group(1)) if fee_m else None
+
+    status = None
+    if r.get("isSoldOut"):
+        status = "접수마감"
+    elif r.get("isPaused"):
+        status = "일시중단"
+
+    return {
+        "name":        r.get("raceName") or r.get("name") or r.get("title"),
+        "race_date":   _parse_date(str(r.get("raceDate") or r.get("date") or "")),
+        "race_time":   r.get("raceStart") or r.get("startTime") or r.get("time"),
+        "location":    r.get("place") or r.get("location") or r.get("venue"),
+        "city":        r.get("region") or r.get("city") or r.get("area"),
+        "organizer":   r.get("host") or r.get("organizer") or r.get("organization"),
+        "distances":   distances,
+        "entry_fee":   entry_fee,
+        "reg_start":   _parse_date(str(r.get("applicationStartDate") or r.get("regStart") or "")),
+        "reg_end":     _parse_date(str(r.get("applicationEndDate") or r.get("regEnd") or "")),
+        "status":      status,
+        "website_url": r.get("homepageUrl") or r.get("homepage") or r.get("website"),
+    }
+
+
+def _marathongo_from_html(soup: BeautifulSoup) -> dict:
+    """__NEXT_DATA__ 파싱 실패 시 HTML fallback"""
+    text = soup.get_text(" ", strip=True)
+
+    name = None
+    og_title = soup.find("meta", property="og:title")
+    if og_title:
+        raw = str(og_title.get("content") or "").strip()
+        name = raw.split("|")[0].strip() or None
+
+    race_date = None
+    dm = re.search(r"(\d{4}-\d{2}-\d{2})\s+\d{2}:\d{2}", text)
+    if dm:
+        race_date = dm.group(1)
+    if not race_date:
+        dm2 = re.search(r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일", text)
+        if dm2:
+            race_date = _parse_date(dm2.group(0))
+
+    time_m = re.search(r"\d{4}-\d{2}-\d{2}\s+(\d{2}:\d{2})", text)
+    race_time = time_m.group(1) if time_m else None
+
+    # "종목/코스/거리" 키워드 주변 100자만 스캔 (전체 텍스트 오탐 방지)
+    dist_ctx = ""
+    ctx_m = re.search(r"(?:종목|코스|거리).{0,100}", text)
+    if ctx_m:
+        dist_ctx = ctx_m.group(0)
+    distances = _normalize_distances(dist_ctx) if dist_ctx else []
+
+    fee_m = re.search(r"참가비\s*(\d{1,3}(?:,\d{3})*)\s*원", text)
+    if not fee_m:
+        fee_m = re.search(r"(\d{1,3}(?:,\d{3})+)\s*원", text)
+    entry_fee = _parse_won(fee_m.group(1)) if fee_m else None
+
+    reg_m = re.search(
+        r"(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})\s*[~～]\s*(\d{4}[.\-]\d{1,2}[.\-]\d{1,2})",
+        text,
+    )
+    return {
+        "name":      name,
+        "race_date": race_date,
+        "race_time": race_time,
+        "distances": distances,
+        "entry_fee": entry_fee,
+        "reg_start": _parse_date(reg_m.group(1)) if reg_m else None,
+        "reg_end":   _parse_date(reg_m.group(2)) if reg_m else None,
+    }
+
+
+def _fetch_marathongo_detail(slug: str, session: requests.Session) -> dict:
+    url = f"{MARATHONGO_BASE}/raceDetail/domestic/{slug}"
+    try:
+        resp = session.get(url, timeout=15)
+        resp.encoding = "utf-8"
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning(f"marathongo 상세 실패: {url} — {e}")
+        return {}
+
+    race: dict = {}
+    data = _get_next_data(resp.text)
+    if data:
+        try:
+            race = _marathongo_from_next_data(data["props"]["pageProps"])
+        except (KeyError, TypeError):
+            pass
+
+    if not race.get("name"):
+        soup = BeautifulSoup(resp.text, "html.parser")
+        race = _marathongo_from_html(soup)
+
+    race["source_url"] = url
+    race["source"] = "marathongo"
+    if not race.get("status"):
+        race["status"] = _compute_status(race)
+    elif _compute_status(race) == "종료":
+        race["status"] = "종료"
+    return race
+
+
+def crawl_marathongo(limit: int = 30) -> list[dict]:
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    list_url = f"{MARATHONGO_BASE}/raceSchedule/domestic"
+    try:
+        resp = session.get(list_url, timeout=15)
+        resp.encoding = "utf-8"
+        resp.raise_for_status()
+    except Exception as e:
+        logger.error(f"marathongo 목록 실패: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    links = soup.find_all("a", href=re.compile(r"/raceDetail/domestic/"))
+    slugs: list[str] = list(dict.fromkeys(
+        str(a["href"]).split("/raceDetail/domestic/")[1].rstrip("/")
+        for a in links
+    ))[:limit]
+
+    if not slugs:
+        data = _get_next_data(resp.text)
+        if data:
+            try:
+                races_raw = data["props"]["pageProps"].get("races") or []
+                slugs = [
+                    r.get("slug") or str(r.get("id"))
+                    for r in races_raw
+                    if r.get("slug") or r.get("id")
+                ][:limit]
+            except (KeyError, TypeError):
+                pass
+
+    results = []
+    for slug in slugs:
+        race = _fetch_marathongo_detail(slug, session)
+        if race.get("name") and race.get("race_date"):
+            results.append(race)
+
+    return results
+
+
+# ── roadrun.co.kr ─────────────────────────────────────────────────────────────
+
+def _roadrun_split_name_dist(text: str) -> tuple[str, list[str]]:
+    """대회명+거리 합쳐진 텍스트 분리. 예: "제26회 여성마라톤10km,5km,3km걷기" """
+    m = re.search(
+        r"((?:풀코스|풀마라톤|마라톤풀|하프마라톤|마라톤하프|풀|하프|마라톤|걷기코스|걷기"
+        r"|\d+(?:\.\d+)?(?:km|KM|K|k|m|마일))"
+        r"(?:[,\s]*(?:풀코스|풀마라톤|마라톤풀|하프마라톤|마라톤하프|풀|하프|마라톤|걷기코스|걷기"
+        r"|\d+(?:\.\d+)?(?:km|KM|K|k|m|마일)))*)\s*$",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        name = text[: m.start()].strip()
+        distances = _normalize_distances(m.group(1))
+        return name, distances
+    return text, []
+
+
+def _parse_roadrun_detail(html: str) -> dict:
+    """roadrun.co.kr view.php 팝업 페이지 파싱"""
+    soup = BeautifulSoup(html, "html.parser")
+
+    label_map = {
+        "대회명":   "name",
+        "대회일시": "datetime_raw",
+        "대회종목": "distances_raw",
+        "대회지역": "city",
+        "대회장소": "location",
+        "주최단체": "organizer",
+        "접수기간": "reg_period",
+        "홈페이지": "website_url",
+    }
+    raw: dict = {}
+    for tr in soup.find_all("tr"):
+        cells = tr.find_all("td")
+        if len(cells) < 2:
+            continue
+        label = cells[0].get_text(strip=True)
+        if label not in label_map:
+            continue
+        key = label_map[label]
+        if label == "홈페이지":
+            a = cells[1].find("a")
+            raw[key] = str(a.get("href", "")).strip() if a else cells[1].get_text(strip=True)
+        else:
+            raw[key] = cells[1].get_text(" ", strip=True)
+
+    result: dict = {}
+
+    if raw.get("name"):
+        result["name"] = raw["name"]
+
+    dt_raw = raw.get("datetime_raw", "")
+    tm = re.search(r"출발시간[:\s]*(오전|오후)\s*(\d{1,2}):(\d{2})", dt_raw)
+    if tm:
+        meridiem, h, minute = tm.group(1), int(tm.group(2)), tm.group(3)
+        if meridiem == "오후" and h < 12:
+            h += 12
+        elif meridiem == "오전" and h == 12:
+            h = 0
+        result["race_time"] = f"{h:02d}:{minute}"
+
+    dist_raw = raw.get("distances_raw", "")
+    if dist_raw:
+        result["distances"] = _normalize_distances(dist_raw)
+
+    for field in ("city", "location", "organizer"):
+        if raw.get(field):
+            result[field] = raw[field]
+
+    rp = raw.get("reg_period", "")
+    rm = re.search(
+        r"(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)\s*[~～]\s*(\d{4}년\s*\d{1,2}월\s*\d{1,2}일)", rp
+    )
+    if rm:
+        result["reg_start"] = _parse_date(rm.group(1))
+        result["reg_end"] = _parse_date(rm.group(2))
+
+    if raw.get("website_url"):
+        result["website_url"] = raw["website_url"]
+
+    return result
+
+
+def _fetch_roadrun_detail(url: str, session: requests.Session) -> dict:
+    try:
+        resp = session.get(url, verify=False, timeout=15)
+        resp.encoding = "euc-kr"
+        resp.raise_for_status()
+        return _parse_roadrun_detail(resp.text)
+    except Exception as e:
+        logger.warning(f"roadrun 상세 실패: {url} — {e}")
+        return {}
+
+
+def _crawl_roadrun_month(
+    year: int,
+    month: int,
+    session: requests.Session,
+    seen_urls: set[str],
+) -> list[dict]:
+    """roadrun.co.kr 특정 연/월 목록 페이지 파싱.
+
+    날짜 셀 형식:
+      과거연도(2025~): "20255/3(토)"  → 연도가 MM/DD 앞에 붙어 있음
+      현재연도(2026):  "5/2(토)"      → 연도 없이 MM/DD만 표시
+
+    HTML 주석 '<!--리스트 시작-->'은 대회 목록 <table> 내부,
+    헤더 행(날짜/대회명/장소/주최) 바로 다음에 위치한다.
+    find_all_next("tr")로 헤더·메타 행을 건너뛰고 순수 대회 행만 파싱한다.
+    seen_urls 는 호출자가 관리하는 공유 집합 — 월 간 중복 URL 제거에 사용.
+    """
+    list_url = f"{ROADRUN_BASE}/schedule/list.php"
+    params = {"syear_key": year, "smonth_key": month}
+
+    try:
+        resp = session.get(list_url, params=params, verify=False, timeout=15)
+        resp.encoding = "euc-kr"
+        resp.raise_for_status()
+    except Exception as e:
+        logger.warning(f"roadrun {year}년 {month}월 fetch 실패: {e}")
+        return []
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    races: list[dict] = []
+
+    # <!--리스트 시작-->은 대회 목록 <table> 내부 헤더 행 바로 다음에 위치.
+    # find_all_next("tr")로 순수 대회 데이터 행(헤더·메타 행 제외)만 가져온다.
+    list_start = soup.find(
+        string=lambda t: isinstance(t, Comment) and "리스트 시작" in t
+    )
+    if list_start:
+        tr_source = list_start.find_all_next("tr")
+    else:
+        # 주석이 없으면 전체 tr 대상 (fallback)
+        logger.debug(f"roadrun {year}년 {month}월: 리스트 시작 주석 미발견, 전체 tr 파싱")
+        tr_source = soup.find_all("tr")
+
+    for row in tr_source:
+        cells = row.find_all("td")
+        if len(cells) < 4:
+            continue
+
+        date_text = cells[0].get_text(strip=True)
+        # 날짜 셀 형식이 연도에 따라 다름:
+        #   과거연도(2025~): "20255/3(토)"  → 연도가 MM/DD 앞에 붙어 있음
+        #   현재연도(2026):  "5/2(토)"      → 연도 없이 MM/DD만 표시
+        dm_full  = re.match(r"^(20\d{2})(\d{1,2})/(\d{1,2})", date_text)
+        dm_short = re.match(r"^(\d{1,2})/(\d{1,2})", date_text)
+
+        if dm_full:
+            year_val  = int(dm_full.group(1))
+            month_val = int(dm_full.group(2))
+            day_val   = int(dm_full.group(3))
+        elif dm_short:
+            # 연도 없는 형식 — 요청 파라미터의 year 사용
+            year_val  = year
+            month_val = int(dm_short.group(1))
+            day_val   = int(dm_short.group(2))
+        else:
+            continue
+
+        name_raw  = cells[1].get_text(strip=True)
+        location  = cells[2].get_text(strip=True)
+        org_phone = cells[3].get_text(strip=True)
+
+        if not name_raw:
+            continue
+
+        race_date = f"{year_val}-{month_val:02d}-{day_val:02d}"
+        name, distances = _roadrun_split_name_dist(name_raw)
+        organizer = re.sub(r"☎.*$", "", org_phone).strip()
+
+        link = cells[1].find("a") or cells[0].find("a")
+        href = ""
+        if link:
+            raw_href = str(link.get("href", ""))
+            if raw_href and not raw_href.lower().startswith("javascript"):
+                href = raw_href
+            else:
+                onclick = str(link.get("onclick", "")) or raw_href
+                om = re.search(r"open_window\([^,]+,\s*['\"]([^'\"]+)['\"]", onclick)
+                if om:
+                    href = om.group(1)
+        source_url = (
+            urljoin(list_url, href)
+            if href
+            else f"{list_url}?key={race_date}_{name[:20]}"
+        )
+
+        # 같은 URL이 여러 월 페이지에 중복 등장할 수 있으므로 공유 집합으로 필터
+        if source_url in seen_urls:
+            continue
+        seen_urls.add(source_url)
+
+        if name and race_date:
+            races.append({
+                "name":       name,
+                "race_date":  race_date,
+                "location":   location,
+                "distances":  distances,
+                "organizer":  organizer,
+                "source":     "roadrun",
+                "source_url": source_url,
+            })
+
+    logger.debug(f"roadrun {year}년 {month}월: {len(races)}건")
+    return races
+
+
+def crawl_roadrun(limit: int = 0) -> list[dict]:
+    """2025년 1월 ~ 2026년 12월을 월별로 순회하며 대회 목록을 수집한다.
+
+    - syear_key / smonth_key 파라미터로 연월 지정 (총 24회 요청)
+    - 월별 요청 사이 CRAWL_DELAY 초 대기 — 대상 서버 차단 방지
+    - seen_urls 공유 집합으로 월 간 중복 URL 제거
+    - 목록 수집 완료 후 ThreadPoolExecutor(max_workers=8) 로 상세 병렬 수집
+    """
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    CRAWL_YEARS  = [2025, 2026]
+    CRAWL_MONTHS = range(1, 13)
+    CRAWL_DELAY  = 10  # 월별 요청 간 대기 시간 (초)
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    seen_urls: set[str] = set()
+    all_races: list[dict] = []
+
+    for year in CRAWL_YEARS:
+        for i, month in enumerate(CRAWL_MONTHS):
+            if i > 0:
+                # 첫 번째 요청은 딜레이 없음, 이후 요청마다 대기
+                time.sleep(CRAWL_DELAY)
+            races = _crawl_roadrun_month(year, month, session, seen_urls)
+            all_races.extend(races)
+            logger.info(f"roadrun {year}년 {month:2d}월: {len(races)}건 수집")
+
+    if not all_races:
+        logger.warning("roadrun: 수집된 대회 없음 (2025~2026)")
+        return []
+
+    if limit > 0:
+        all_races = all_races[:limit]
+
+    def enrich(race: dict) -> dict:
+        detail = _fetch_roadrun_detail(race["source_url"], session)
+        merged = {**race, **detail}
+        merged["status"] = _compute_status(merged)
+        return merged
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        enriched = list(executor.map(enrich, all_races))
+
+    logger.info(f"roadrun 총 수집: {len(enriched)}건")
+    return enriched
+
+
+# ── 통합 ─────────────────────────────────────────────────────────────────────
+
+def _core_name(name: str) -> str:
+    t = name or ""
+    t = re.sub(r"20\d{2}", "", t)
+    t = re.sub(r"제\s*\d+\s*회", "", t)
+    t = re.sub(r"[^가-힣a-zA-Z0-9]", "", t)
+    t = re.sub(r"마라톤|대회|마라|런|RUN|run", "", t, flags=re.IGNORECASE)
+    return t.strip().lower()
+
+
+def _name_similarity(a: str, b: str) -> float:
+    ca, cb = _core_name(a), _core_name(b)
+    if not ca or not cb:
+        return 0.0
+    if ca in cb or cb in ca:
+        return 1.0
+    shorter, longer = (ca, cb) if len(ca) <= len(cb) else (cb, ca)
+    common = sum(1 for c in shorter if c in longer)
+    return common / len(longer)
+
+
+def _merge_race(base: dict, supplement: dict) -> dict:
+    merged = dict(base)
+    for key, val in supplement.items():
+        if key in ("source", "source_url"):
+            continue
+        if merged.get(key) is None and val is not None:
+            merged[key] = val
+    return merged
+
+
+def _dedup_races(marathongo: list[dict], roadrun: list[dict]) -> list[dict]:
+    """날짜 + 대회명 유사도 기반 중복 제거. marathongo 우선, roadrun으로 null 필드 보완."""
+    result = list(marathongo)
+    THRESHOLD = 0.7
+
+    for rr in roadrun:
+        rr_date = rr.get("race_date")
+        matched = None
+        for mg in marathongo:
+            if mg.get("race_date") != rr_date:
+                continue
+            if _name_similarity(mg.get("name", ""), rr.get("name", "")) >= THRESHOLD:
+                matched = mg
+                break
+
+        if matched:
+            idx = result.index(matched)
+            result[idx] = _merge_race(matched, rr)
+            logger.debug(f"중복 병합: {matched.get('name')} ← {rr.get('name')}")
+        else:
+            result.append(rr)
+
+    return result
+
