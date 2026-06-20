@@ -3,7 +3,8 @@
 
 World Athletics Label Road Races (GraphQL) 수집 및 pilot 관련 유틸.
 
-marathongo.co.kr / roadrun.co.kr 크롤러는 2026-06 사용 중단 — crawl_* stub은 [] 반환.
+marathongo: pilot edition 날짜 조회 전용 (marathongo_crawler.py)
+roadrun / crawl_all: 사용 중단
 """
 import re
 import json
@@ -139,14 +140,9 @@ def _normalize_distances(raw) -> list[str]:
 
 
 
-# ── marathongo.co.kr / roadrun.or.kr (비활성 — catalog·Admin 수동 입력) ─────
-# 레거시 구현: app/services/_legacy_domestic_crawlers.py (참고용 보관)
+# ── marathongo (날짜 조회) / roadrun (비활성) ─────────────────────────────────
 
-
-def crawl_marathongo(limit: int = 30) -> list[dict]:
-    """marathongo.co.kr 크롤링 비활성. 빈 목록 반환."""
-    logger.info("crawl_marathongo disabled (use pilot catalog / Admin manual dates)")
-    return []
+from app.services.marathongo_crawler import crawl_marathongo  # noqa: E402
 
 
 def crawl_roadrun(limit: int = 30) -> list[dict]:

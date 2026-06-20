@@ -82,7 +82,7 @@ def sync_wa_label_races_endpoint(
 
 @router.get("/pilot-edition-date", response_model=dict)
 def get_pilot_edition_date(key: str, year: int, fetch_external: bool = True):
-    """국내 pilot 4대회 — 연도별 race_date (catalog → null)."""
+    """국내 pilot 4대회 — 연도별 race_date (catalog → marathongo → null)."""
     if year < 2018 or year > 2035:
         raise HTTPException(status_code=400, detail="year는 2018~2035")
     return lookup_pilot_race_date(key.strip(), year, fetch_external=fetch_external)
