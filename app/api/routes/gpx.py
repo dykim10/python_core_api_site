@@ -2,13 +2,15 @@
 GPX 코스 파일 S3 업로드/삭제 라우터 (app/api/routes/gpx.py)
 
 REVIEW 관리자가 공식 GPX 코스 파일을 업로드할 때 호출.
-검증 후 S3에 고정 경로로 저장하고 URL을 반환한다.
+검증 후 S3에 고정 경로로 저장하고, 업로드 시점에 딱 한 번 고도/구간 데이터를
+파싱해 함께 반환한다 (race_plan_service.py는 이 결과만 읽으므로 사용자별
+반복 다운로드/파싱이 없다 — gpx_service.py 모듈 docstring 참고).
 
 엔드포인트:
   POST /api/gpx/upload
     - multipart: file (GPX), race_edition_id (int), course_type (FULL/HALF/10K)
     - S3 저장 경로: race-courses/{race_edition_id}/{course_type}.gpx
-    - 응답: { "gpx_url": str }
+    - 응답: { "gpx_url": str, "elevation_data": dict|null, "segments": list|null }
 
   DELETE /api/gpx/delete
     - query: url (S3 or CloudFront URL)
@@ -16,9 +18,11 @@ REVIEW 관리자가 공식 GPX 코스 파일을 업로드할 때 호출.
 """
 import boto3
 from urllib.parse import urlparse
+from typing import Any, Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from pydantic import BaseModel
 from app.core.config import settings
+from app.services.gpx_service import parse_gpx_bytes
 
 router = APIRouter(prefix="/api/gpx", tags=["gpx"])
 
@@ -35,6 +39,8 @@ VALID_COURSE_TYPES = {"FULL", "HALF", "10K"}
 
 class GpxUploadResponse(BaseModel):
     gpx_url: str
+    elevation_data: Optional[dict[str, Any]] = None
+    segments: Optional[list[dict[str, Any]]] = None
 
 
 def _s3_client():
@@ -83,7 +89,14 @@ async def upload_gpx(
 
     base = settings.aws_url.rstrip("/") if settings.aws_url else \
            f"https://{settings.aws_bucket}.s3.{settings.aws_default_region}.amazonaws.com"
-    return GpxUploadResponse(gpx_url=f"{base}/{key}")
+
+    parsed = parse_gpx_bytes(gpx_bytes)
+
+    return GpxUploadResponse(
+        gpx_url=f"{base}/{key}",
+        elevation_data=parsed["elevation_data"] if parsed else None,
+        segments=parsed["segments"] if parsed else None,
+    )
 
 
 @router.delete("/delete")
