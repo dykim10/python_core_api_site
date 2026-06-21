@@ -10,7 +10,8 @@ REVIEW 관리자가 공식 GPX 코스 파일을 업로드할 때 호출.
   POST /api/gpx/upload
     - multipart: file (GPX), race_edition_id (int), course_type (FULL/HALF/10K)
     - S3 저장 경로: race-courses/{race_edition_id}/{course_type}.gpx
-    - 응답: { "gpx_url": str, "elevation_data": dict|null, "segments": list|null }
+    - 응답: { "gpx_url": str, "elevation_data": dict|null, "segments": list|null,
+               "coordinates": list|null, "markers": list|null }
 
   DELETE /api/gpx/delete
     - query: url (S3 or CloudFront URL)
@@ -41,6 +42,8 @@ class GpxUploadResponse(BaseModel):
     gpx_url: str
     elevation_data: Optional[dict[str, Any]] = None
     segments: Optional[list[dict[str, Any]]] = None
+    coordinates: Optional[list[dict[str, float]]] = None
+    markers: Optional[list[dict[str, Any]]] = None
 
 
 def _s3_client():
@@ -96,6 +99,8 @@ async def upload_gpx(
         gpx_url=f"{base}/{key}",
         elevation_data=parsed["elevation_data"] if parsed else None,
         segments=parsed["segments"] if parsed else None,
+        coordinates=parsed["coordinates"] if parsed else None,
+        markers=parsed["markers"] if parsed else None,
     )
 
 

@@ -1,14 +1,15 @@
 """
-GPX 파일 파싱 — 고도/구간 데이터 추출.
+GPX 파일 파싱 — 고도/구간/좌표 데이터 추출.
 
-업로드 시점에 딱 한 번만 파싱해서 race_courses.elevation_data/segments에
-영구 저장한다. 레이스 플랜 생성(race_plan_service.py)은 이 컬럼만 읽으므로,
+업로드 시점에 딱 한 번만 파싱해서 race_courses 컬럼에 영구 저장한다.
+레이스 플랜 생성(race_plan_service.py)은 DB 컬럼만 읽으므로,
 사용자가 몇 명이든 GPX 다운로드·파싱은 "코스당 1회"로 고정된다.
 """
 from __future__ import annotations
 
 import io
 import logging
+import math
 from typing import Any
 
 import gpxpy
@@ -17,10 +18,11 @@ logger = logging.getLogger(__name__)
 
 SEGMENT_LENGTH_M = 5000  # 5km 단위 구간 분할
 FLAT_GRADE_PCT = 0.8     # 이 값 이상/이하 평균 경사(%)면 오르막/내리막으로 분류
+DP_EPSILON_M = 10.0      # Douglas-Peucker 허용 오차 (미터)
 
 
 def parse_gpx_bytes(gpx_bytes: bytes) -> dict[str, Any] | None:
-    """GPX 바이트 → {elevation_data, segments}. 파싱 실패/포인트 없으면 None (graceful)."""
+    """GPX 바이트 → {elevation_data, segments, coordinates, markers}. 실패 시 None."""
     try:
         gpx = gpxpy.parse(io.BytesIO(gpx_bytes))
     except Exception as e:
@@ -44,10 +46,151 @@ def parse_gpx_bytes(gpx_bytes: bytes) -> dict[str, Any] | None:
         "distance_km": round(total_m / 1000, 2) if total_m else None,
     }
 
+    coordinates = _build_coordinates(points_data)
+    markers = _build_markers(points_data, total_m)
+
     return {
         "elevation_data": elevation_data,
         "segments": _build_segments(points_data, total_m),
+        "coordinates": coordinates,
+        "markers": markers,
     }
+
+
+def _latlng_to_xy(lat: float, lng: float, ref_lat: float, ref_lng: float) -> tuple[float, float]:
+    x = (lng - ref_lng) * 111_320 * math.cos(math.radians(ref_lat))
+    y = (lat - ref_lat) * 110_540
+    return x, y
+
+
+def _perpendicular_distance_m(
+    point: tuple[float, float],
+    line_start: tuple[float, float],
+    line_end: tuple[float, float],
+) -> float:
+    px, py = point
+    x1, y1 = line_start
+    x2, y2 = line_end
+    dx = x2 - x1
+    dy = y2 - y1
+    if dx == 0 and dy == 0:
+        return math.hypot(px - x1, py - y1)
+    t = max(0.0, min(1.0, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)))
+    proj_x = x1 + t * dx
+    proj_y = y1 + t * dy
+    return math.hypot(px - proj_x, py - proj_y)
+
+
+def _douglas_peucker(
+    points: list[tuple[float, float, float, float]],
+    epsilon_m: float,
+) -> list[tuple[float, float, float, float]]:
+    """(lat, lng, x, y) 리스트를 epsilon_m 기준으로 단순화."""
+    if len(points) <= 2:
+        return points
+
+    start = points[0]
+    end = points[-1]
+    max_dist = 0.0
+    max_idx = 0
+    for i in range(1, len(points) - 1):
+        dist = _perpendicular_distance_m(
+            (points[i][2], points[i][3]),
+            (start[2], start[3]),
+            (end[2], end[3]),
+        )
+        if dist > max_dist:
+            max_dist = dist
+            max_idx = i
+
+    if max_dist > epsilon_m:
+        left = _douglas_peucker(points[: max_idx + 1], epsilon_m)
+        right = _douglas_peucker(points[max_idx:], epsilon_m)
+        return left[:-1] + right
+
+    return [start, end]
+
+
+def _build_coordinates(points_data) -> list[dict[str, float]]:
+    raw: list[tuple[float, float, float, float]] = []
+    ref_lat = points_data[0].point.latitude
+    ref_lng = points_data[0].point.longitude
+
+    for pd in points_data:
+        lat = pd.point.latitude
+        lng = pd.point.longitude
+        x, y = _latlng_to_xy(lat, lng, ref_lat, ref_lng)
+        raw.append((lat, lng, x, y))
+
+    simplified = _douglas_peucker(raw, DP_EPSILON_M)
+    return [{"lat": round(lat, 6), "lng": round(lng, 6)} for lat, lng, _, _ in simplified]
+
+
+def _interpolate_latlng(points_data, target_m: float) -> tuple[float, float]:
+    if target_m <= 0:
+        first = points_data[0].point
+        return first.latitude, first.longitude
+
+    for i, pd in enumerate(points_data):
+        if pd.distance_from_start >= target_m:
+            if i == 0:
+                p = pd.point
+                return p.latitude, p.longitude
+            prev = points_data[i - 1]
+            seg = pd.distance_from_start - prev.distance_from_start
+            if seg <= 0:
+                p = pd.point
+                return p.latitude, p.longitude
+            t = (target_m - prev.distance_from_start) / seg
+            lat = prev.point.latitude + t * (pd.point.latitude - prev.point.latitude)
+            lng = prev.point.longitude + t * (pd.point.longitude - prev.point.longitude)
+            return lat, lng
+
+    last = points_data[-1].point
+    return last.latitude, last.longitude
+
+
+def _marker_distances_m(total_m: float) -> list[float]:
+    if total_m <= 0:
+        return []
+
+    targets = [0.0]
+    d = float(SEGMENT_LENGTH_M)
+    while d < total_m - 1.0:
+        targets.append(d)
+        d += float(SEGMENT_LENGTH_M)
+
+    if abs(targets[-1] - total_m) > 1.0:
+        targets.append(total_m)
+
+    return targets
+
+
+def _build_markers(points_data, total_m: float) -> list[dict[str, Any]]:
+    markers: list[dict[str, Any]] = []
+    distances = _marker_distances_m(total_m)
+
+    for idx, dist_m in enumerate(distances):
+        lat, lng = _interpolate_latlng(points_data, dist_m)
+        km = round(dist_m / 1000, 1)
+        is_first = idx == 0
+        is_last = idx == len(distances) - 1
+
+        if is_first:
+            label = "출발"
+        elif is_last:
+            label = "도착"
+        else:
+            label = f"{int(round(km))}km"
+
+        markers.append({
+            "km": km,
+            "lat": round(lat, 6),
+            "lng": round(lng, 6),
+            "label": label,
+        })
+
+    return markers
 
 
 def _build_segments(points_data, total_m: float) -> list[dict[str, Any]]:
