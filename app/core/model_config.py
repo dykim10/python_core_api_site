@@ -2,7 +2,7 @@
 AI 모델 티어링 (definition 08-core 비용 가드)
 """
 
-MODEL_TIER_LIGHT = "claude-sonnet-4-20250514"
+MODEL_TIER_LIGHT = "claude-sonnet-4-6"
 MODEL_TIER_HEAVY = "claude-opus-4-8"
 
 TASK_MODEL = {
