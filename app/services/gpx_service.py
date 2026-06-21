@@ -150,6 +150,70 @@ def _interpolate_latlng(points_data, target_m: float) -> tuple[float, float]:
     return last.latitude, last.longitude
 
 
+def _interpolate_elevation(points_data, target_m: float) -> float | None:
+    if target_m <= 0:
+        return points_data[0].point.elevation
+
+    for i, pd in enumerate(points_data):
+        if pd.distance_from_start >= target_m:
+            if pd.point.elevation is None:
+                return None
+            if i == 0:
+                return float(pd.point.elevation)
+            prev = points_data[i - 1]
+            if prev.point.elevation is None:
+                return float(pd.point.elevation)
+            seg = pd.distance_from_start - prev.distance_from_start
+            if seg <= 0:
+                return float(pd.point.elevation)
+            t = (target_m - prev.distance_from_start) / seg
+            return float(prev.point.elevation + t * (pd.point.elevation - prev.point.elevation))
+
+    last = points_data[-1].point
+    return float(last.elevation) if last.elevation is not None else None
+
+
+def _elevation_gain_loss_between(points_data, start_m: float, end_m: float) -> tuple[float, float]:
+    if start_m >= end_m:
+        return 0.0, 0.0
+
+    samples: list[tuple[float, float]] = []
+    start_elev = _interpolate_elevation(points_data, start_m)
+    if start_elev is not None:
+        samples.append((start_m, start_elev))
+
+    for pd in points_data:
+        d = pd.distance_from_start
+        if start_m < d < end_m and pd.point.elevation is not None:
+            samples.append((d, float(pd.point.elevation)))
+
+    end_elev = _interpolate_elevation(points_data, end_m)
+    if end_elev is not None:
+        samples.append((end_m, end_elev))
+
+    if len(samples) < 2:
+        return 0.0, 0.0
+
+    samples.sort(key=lambda item: item[0])
+    deduped: list[tuple[float, float]] = []
+    for dist, elev in samples:
+        if deduped and abs(deduped[-1][0] - dist) < 0.01:
+            deduped[-1] = (dist, elev)
+        else:
+            deduped.append((dist, elev))
+
+    gain = 0.0
+    loss = 0.0
+    for i in range(1, len(deduped)):
+        delta = deduped[i][1] - deduped[i - 1][1]
+        if delta > 0:
+            gain += delta
+        elif delta < 0:
+            loss += abs(delta)
+
+    return round(gain, 1), round(loss, 1)
+
+
 def _marker_distances_m(total_m: float) -> list[float]:
     if total_m <= 0:
         return []
@@ -183,12 +247,24 @@ def _build_markers(points_data, total_m: float) -> list[dict[str, Any]]:
         else:
             label = f"{int(round(km))}km"
 
-        markers.append({
+        prev_dist = distances[idx - 1] if idx > 0 else 0.0
+        elev_m = _interpolate_elevation(points_data, dist_m)
+        gain_m, loss_m = (
+            (0.0, 0.0) if idx == 0 else _elevation_gain_loss_between(points_data, prev_dist, dist_m)
+        )
+
+        marker: dict[str, Any] = {
             "km": km,
             "lat": round(lat, 6),
             "lng": round(lng, 6),
             "label": label,
-        })
+            "gain_m": gain_m,
+            "loss_m": loss_m,
+        }
+        if elev_m is not None:
+            marker["elev_m"] = round(elev_m, 1)
+
+        markers.append(marker)
 
     return markers
 

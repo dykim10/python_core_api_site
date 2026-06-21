@@ -33,6 +33,27 @@ class TestGpxCoordinates:
         assert parsed["markers"][0]["km"] == 0
         assert parsed["markers"][0]["label"] == "출발"
         assert parsed["markers"][-1]["label"] == "도착"
+        assert parsed["markers"][0]["gain_m"] == 0
+        assert parsed["markers"][0]["loss_m"] == 0
+
+    def test_markers_include_elevation_fields(self):
+        parsed = parse_gpx_bytes(_sample_gpx_bytes())
+        assert parsed is not None
+        assert parsed["markers"][0]["elev_m"] is not None
+        second = parsed["markers"][1]
+        assert second["elev_m"] is not None
+        assert second["gain_m"] >= 0
+        assert second["loss_m"] >= 0
+        assert second["gain_m"] + second["loss_m"] > 0
+
+    def test_markers_without_elevation_tags(self):
+        gpx = b'<?xml version="1.0"?><gpx version="1.1"><trk><trkseg>'
+        gpx += b'<trkpt lat="37.5" lon="127.0"/><trkpt lat="37.51" lon="127.01"/>'
+        gpx += b'</trkseg></trk></gpx>'
+        parsed = parse_gpx_bytes(gpx)
+        assert parsed is not None
+        assert "elev_m" not in parsed["markers"][0]
+        assert parsed["markers"][1]["gain_m"] == 0
 
     def test_marker_distances_full_marathon(self):
         distances = _marker_distances_m(42_195)
