@@ -181,8 +181,8 @@ def _course_text(course: dict | None) -> str:
     if course.get("elevation_data"):
         elev = course["elevation_data"]
         if isinstance(elev, dict):
-            gain = elev.get("total_gain_m")
-            max_elev = elev.get("max_m")
+            gain = elev.get("total_gain_m") or elev.get("total_ascent_m")
+            max_elev = elev.get("max_m") or elev.get("max_elevation_m")
             if gain:
                 lines.append(f"총 고도 상승 {gain}m")
             if max_elev:
@@ -237,15 +237,62 @@ def _goal_pace(goal_seconds: int, course_type: str) -> str:
 
 # ── 프롬프트 빌더 ─────────────────────────────────────────────────────────────
 
+def _normalize_image_log(entry: dict) -> dict:
+    """워치 스크린샷 파싱 결과 → running_logs 호환 dict."""
+    return {
+        "distance_km": entry.get("distance_km"),
+        "duration_seconds": entry.get("duration_seconds"),
+        "avg_pace_seconds": entry.get("avg_pace_seconds"),
+        "run_date": entry.get("run_date"),
+        "source": "image_parse",
+        "app_name": entry.get("app_name"),
+        "activity_type": entry.get("activity_type"),
+        "avg_heart_rate": entry.get("avg_heart_rate"),
+        "elevation_m": entry.get("elevation_m"),
+        "is_indoor": entry.get("is_indoor"),
+    }
+
+
+def _merge_running_logs(
+    crew_logs: list[dict],
+    parsed_image_logs: list[dict] | None,
+    manual_logs: list[dict] | None,
+) -> list[dict]:
+    merged = list(crew_logs or [])
+    if parsed_image_logs:
+        merged.extend(_normalize_image_log(x) for x in parsed_image_logs if isinstance(x, dict))
+    if not merged and manual_logs:
+        merged = list(manual_logs)
+    return merged
+
+
+def _pace_label(seconds: int | float | None) -> str:
+    if not seconds:
+        return "—"
+    sec = int(seconds)
+    m, s = divmod(sec, 60)
+    return f"{m}'{s:02d}\"/km"
+
+
 def _running_logs_text(logs: list[dict]) -> str:
     if not logs:
         return "훈련 데이터 없음 — 보수적 페이스 권장"
     lines = []
-    for i, log in enumerate(logs[:10], 1):
+    for i, log in enumerate(logs[:15], 1):
         dist = log.get("distance_km")
-        pace = log.get("avg_pace_seconds") or log.get("duration_seconds")
-        when = log.get("run_date", "")
-        lines.append(f"  {i}. {when} — {dist}km ({pace})")
+        when = log.get("run_date") or "날짜 미상"
+        pace = _pace_label(log.get("avg_pace_seconds"))
+        src = log.get("source")
+        extra = []
+        if log.get("avg_heart_rate"):
+            extra.append(f"심박 {log['avg_heart_rate']}bpm")
+        if log.get("elevation_m"):
+            extra.append(f"고도 {log['elevation_m']}m")
+        if log.get("app_name") and log.get("app_name") != "unknown":
+            extra.append(str(log["app_name"]))
+        suffix = f" ({', '.join(extra)})" if extra else ""
+        tag = " [스크린샷]" if src == "image_parse" else ""
+        lines.append(f"  {i}. {when} — {dist}km, 페이스 {pace}{suffix}{tag}")
     return "\n".join(lines)
 
 
@@ -366,6 +413,7 @@ def generate(
     recent_long_km: float | None = None,
     recent_10k_time: str | None = None,
     manual_logs: list[dict] | None = None,
+    parsed_image_logs: list[dict] | None = None,
     live: bool = True,
 ) -> dict[str, Any]:
     """
@@ -378,15 +426,16 @@ def generate(
     weather_forecast = _fetch_forecast_for_edition(race_info, live)
     course = _fetch_course(race_edition_id, course_type, live)
 
-    running_logs = _fetch_running_logs(user_id, live)
-    if not running_logs and manual_logs:
-        running_logs = manual_logs
+    crew_logs = _fetch_running_logs(user_id, live)
+    running_logs = _merge_running_logs(crew_logs, parsed_image_logs, manual_logs)
+    normalized_images = [_normalize_image_log(x) for x in (parsed_image_logs or []) if isinstance(x, dict)]
 
     input_snapshot: dict[str, Any] = {
         "goal_time": goal_time,
         "recent_time": recent_10k_time,
         "training_state": training_status,
         "running_logs": running_logs,
+        "parsed_image_logs": normalized_images,
         "weather_observed": weather_obs,
         "weather_forecast": _strip_volatile_forecast(weather_forecast),
     }
@@ -470,6 +519,7 @@ def generate(
         "rag_cases_found": len(rag_cases),
         "has_weather": weather_obs is not None,
         "has_course": course is not None,
+        "parsed_images_count": len(normalized_images),
         "model": MODEL,
         "cache_key": cache_key,
     }

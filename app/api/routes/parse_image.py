@@ -201,8 +201,54 @@ def _upload_to_s3(image_bytes: bytes, content_type: str) -> str:
     return f"{base}/{key}"
 
 
-@router.post("/parse-image", response_model=ParseImageResponse)
-async def parse_image(file: UploadFile = File(...)):
+def _parse_image_bytes(image_bytes: bytes, media_type: str) -> dict:
+    """Claude Vision 파싱 — S3 업로드 없음."""
+    prompt = _build_parse_prompt()
+    raw = invoke_with_image(image_bytes, media_type, prompt)
+    cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    parsed = json.loads(cleaned)
+
+    year_in_image = bool(parsed.get("year_in_image", True))
+    activity_type = parsed.get("activity_type") or "unknown"
+    is_indoor = bool(parsed.get("is_indoor") or False)
+    if activity_type == "treadmill":
+        is_indoor = True
+
+    return {
+        "app_name": parsed.get("app_name") or "unknown",
+        "activity_type": activity_type,
+        "run_date": _normalize_run_date(parsed.get("run_date"), year_in_image),
+        "distance_km": parsed.get("distance_km"),
+        "duration_seconds": parsed.get("duration_seconds"),
+        "avg_pace_seconds": parsed.get("avg_pace_seconds"),
+        "best_pace_seconds": parsed.get("best_pace_seconds"),
+        "calories": parsed.get("calories"),
+        "avg_heart_rate": parsed.get("avg_heart_rate"),
+        "is_indoor": is_indoor,
+        "elevation_m": parsed.get("elevation_m"),
+        "has_map": parsed.get("has_map"),
+        "raw_parsed": parsed,
+    }
+
+
+class ParseImageEphemeralResponse(BaseModel):
+    """S3 저장 없이 1회성 파싱 결과 (레이스 플랜 보조 입력용)."""
+    app_name: Optional[str] = None
+    activity_type: Optional[str] = None
+    run_date: Optional[str] = None
+    distance_km: Optional[float] = None
+    duration_seconds: Optional[int] = None
+    avg_pace_seconds: Optional[int] = None
+    best_pace_seconds: Optional[int] = None
+    calories: Optional[int] = None
+    avg_heart_rate: Optional[int] = None
+    is_indoor: bool = False
+    elevation_m: Optional[float] = None
+    has_map: Optional[bool] = None
+    raw_parsed: dict = {}
+
+
+async def _read_image_upload(file: UploadFile) -> tuple[bytes, str]:
     media_type = SUPPORTED_TYPES.get(file.content_type or "")
     if not media_type:
         raise HTTPException(status_code=400, detail=f"지원하지 않는 이미지 형식: {file.content_type}")
@@ -210,6 +256,32 @@ async def parse_image(file: UploadFile = File(...)):
     image_bytes = await file.read()
     if len(image_bytes) > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="이미지 크기는 10MB 이하여야 합니다.")
+    if len(image_bytes) == 0:
+        raise HTTPException(status_code=400, detail="빈 파일입니다.")
+
+    return image_bytes, media_type
+
+
+@router.post("/parse-image/ephemeral", response_model=ParseImageEphemeralResponse)
+async def parse_image_ephemeral(file: UploadFile = File(...)):
+    """
+    러닝 앱 스크린샷 1회성 파싱 — S3 저장 없음.
+    REVIEW 레이스 플랜 생성 시 보조 훈련 데이터 추출용.
+    """
+    image_bytes, media_type = await _read_image_upload(file)
+    try:
+        parsed = _parse_image_bytes(image_bytes, media_type)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"AI 응답 파싱 실패: {e}") from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI 파싱 오류: {e}") from e
+
+    return ParseImageEphemeralResponse(**parsed)
+
+
+@router.post("/parse-image", response_model=ParseImageResponse)
+async def parse_image(file: UploadFile = File(...)):
+    image_bytes, media_type = await _read_image_upload(file)
 
     # 1. S3 업로드
     try:
@@ -219,36 +291,13 @@ async def parse_image(file: UploadFile = File(...)):
 
     # 2. Claude Vision 파싱
     try:
-        prompt = _build_parse_prompt()
-        raw = invoke_with_image(image_bytes, media_type, prompt)
-        cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        parsed = json.loads(cleaned)
+        parsed = _parse_image_bytes(image_bytes, media_type)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail=f"AI 응답 파싱 실패: {raw}")
+        raise HTTPException(status_code=500, detail="AI 응답 파싱 실패")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI 파싱 오류: {str(e)}")
 
-    year_in_image = bool(parsed.get("year_in_image", True))
-    activity_type = parsed.get("activity_type") or "unknown"
-
-    # treadmill이면 is_indoor를 강제 true (프롬프트 지시 보강)
-    is_indoor = bool(parsed.get("is_indoor") or False)
-    if activity_type == "treadmill":
-        is_indoor = True
-
     return ParseImageResponse(
         s3_url=s3_url,
-        app_name=parsed.get("app_name") or "unknown",
-        activity_type=activity_type,
-        run_date=_normalize_run_date(parsed.get("run_date"), year_in_image),
-        distance_km=parsed.get("distance_km"),
-        duration_seconds=parsed.get("duration_seconds"),
-        avg_pace_seconds=parsed.get("avg_pace_seconds"),
-        best_pace_seconds=parsed.get("best_pace_seconds"),
-        calories=parsed.get("calories"),
-        avg_heart_rate=parsed.get("avg_heart_rate"),
-        is_indoor=is_indoor,
-        elevation_m=parsed.get("elevation_m"),
-        has_map=parsed.get("has_map"),
-        raw_parsed=parsed,
+        **parsed,
     )

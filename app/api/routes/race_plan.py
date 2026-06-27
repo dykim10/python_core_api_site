@@ -26,6 +26,7 @@ class GenerateRequest(BaseModel):
     recent_long_km:   float | None = Field(None, ge=1, le=200)
     recent_10k_time:  str | None   = Field(None, pattern=r"^\d{1,2}:\d{2}:\d{2}$")
     manual_logs:      list[dict] | None = None
+    parsed_image_logs: list[dict] | None = None
     live:             bool = True
 
 
@@ -47,6 +48,7 @@ def generate_plan(req: GenerateRequest):
             recent_long_km=req.recent_long_km,
             recent_10k_time=req.recent_10k_time,
             manual_logs=req.manual_logs,
+            parsed_image_logs=req.parsed_image_logs,
             live=req.live,
         )
     except ValueError as e:
