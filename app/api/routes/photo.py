@@ -7,9 +7,10 @@ Pillow로 리사이즈 + WebP 변환 후 S3에 저장하고 URL을 반환한다.
 엔드포인트:
   POST /api/photo/resize-webp
     - 원본 이미지 → max 800×800 비율 유지 리사이즈 → WebP 변환 → S3 저장
-    - 저장 경로: {folder}/{uuid}_thumb.webp  (folder 기본값: photo-galleries/{YYYY}/{MM})
+    - 저장 경로: {folder}/{uuid}.webp  (folder 기본값: photo-galleries/{YYYY}/{MM})
     - 응답: { "thumbnail_url": str, "width": int, "height": int }
-    - folder 파라미터로 S3 저장 경로 prefix 지정 가능 (예: avatars/42)
+    - folder 파라미터로 S3 저장 경로 prefix 지정 가능 (예: avatars/42, main)
+    - max_width, max_height, max_size_bytes 로 용도별 한도 조정 가능 (기본: 800×800, 10MB)
 """
 import io
 import uuid
@@ -29,9 +30,9 @@ from app.core.config import settings
 router = APIRouter(prefix="/api/photo", tags=["photo"])
 
 SUPPORTED_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif"}
-MAX_SIZE_BYTES  = 10 * 1024 * 1024   # 10MB
-THUMBNAIL_MAX   = (800, 800)          # 장축 최대 800px
-WEBP_QUALITY    = 85
+DEFAULT_MAX_SIZE_BYTES = 10 * 1024 * 1024   # 10MB
+DEFAULT_THUMBNAIL_MAX = (800, 800)          # 장축 최대 800px
+WEBP_QUALITY = 85
 
 
 class ResizeWebpResponse(BaseModel):
@@ -40,17 +41,15 @@ class ResizeWebpResponse(BaseModel):
     height: int
 
 
-def _convert_to_webp(image_bytes: bytes) -> tuple[bytes, int, int]:
+def _convert_to_webp(image_bytes: bytes, max_size: tuple[int, int]) -> tuple[bytes, int, int]:
     """Pillow로 리사이즈 + WebP 변환. (webp_bytes, width, height) 반환."""
     with Image.open(io.BytesIO(image_bytes)) as img:
-        # RGBA / P(팔레트) 모드 → RGB 변환 (WebP는 RGBA 지원하나 일관성 유지)
         if img.mode in ("RGBA", "P"):
             img = img.convert("RGBA")
         else:
             img = img.convert("RGB")
 
-        # 비율 유지 리사이즈 (THUMBNAIL_MAX 초과할 때만)
-        img.thumbnail(THUMBNAIL_MAX, Image.LANCZOS)
+        img.thumbnail(max_size, Image.LANCZOS)
 
         buf = io.BytesIO()
         img.save(buf, format="WEBP", quality=WEBP_QUALITY, method=6)
@@ -82,6 +81,9 @@ def _upload_webp(webp_bytes: bytes, folder: str) -> str:
 async def resize_to_webp(
     file: UploadFile = File(..., description="변환할 원본 이미지"),
     folder: Optional[str] = Form(None, description="S3 저장 경로 prefix (기본: photo-galleries/YYYY/MM)"),
+    max_width: Optional[int] = Form(None, description="리사이즈 최대 가로 (px)"),
+    max_height: Optional[int] = Form(None, description="리사이즈 최대 세로 (px)"),
+    max_size_bytes: Optional[int] = Form(None, description="업로드 허용 최대 바이트"),
 ):
     """이미지 리사이즈 + WebP 변환 → S3 저장 → thumbnail_url 반환"""
     if not _PIL_AVAILABLE:
@@ -90,17 +92,23 @@ async def resize_to_webp(
     if file.content_type not in SUPPORTED_TYPES:
         raise HTTPException(status_code=400, detail=f"지원하지 않는 형식: {file.content_type}")
 
-    image_bytes = await file.read()
-    if len(image_bytes) > MAX_SIZE_BYTES:
-        raise HTTPException(status_code=400, detail="이미지 크기는 10MB 이하여야 합니다.")
+    size_limit = max_size_bytes if max_size_bytes and max_size_bytes > 0 else DEFAULT_MAX_SIZE_BYTES
+    thumb_max = (
+        max_width if max_width and max_width > 0 else DEFAULT_THUMBNAIL_MAX[0],
+        max_height if max_height and max_height > 0 else DEFAULT_THUMBNAIL_MAX[1],
+    )
 
-    # folder 미지정 시 기본 경로 사용
+    image_bytes = await file.read()
+    if len(image_bytes) > size_limit:
+        mb = size_limit // (1024 * 1024)
+        raise HTTPException(status_code=400, detail=f"이미지 크기는 {mb}MB 이하여야 합니다.")
+
     if not folder:
-        now    = datetime.now()
+        now = datetime.now()
         folder = f"photo-galleries/{now.year}/{now.month:02d}"
 
     try:
-        webp_bytes, width, height = _convert_to_webp(image_bytes)
+        webp_bytes, width, height = _convert_to_webp(image_bytes, thumb_max)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"이미지 변환 실패: {str(e)}")
 
