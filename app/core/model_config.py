@@ -15,6 +15,7 @@ TASK_MODEL = {
     "coach_weekly_report": MODEL_TIER_HEAVY,
     "coach_schedule": MODEL_TIER_HEAVY,
     "coach_inbody": MODEL_TIER_LIGHT,
+    "coach_pb_parse": MODEL_TIER_LIGHT,
 }
 
 

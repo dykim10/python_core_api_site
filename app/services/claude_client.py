@@ -20,12 +20,12 @@ from app.core.config import settings
 from app.core.model_config import model_for
 
 
-def invoke_with_image(image_bytes: bytes, media_type: str, prompt: str) -> str:
+def invoke_with_image(image_bytes: bytes, media_type: str, prompt: str, task: str = "parse_image") -> str:
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
     image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
 
     response = client.messages.create(
-        model=model_for("parse_image"),
+        model=model_for(task),
         max_tokens=1024,
         messages=cast(list[MessageParam], [
             {

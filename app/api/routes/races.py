@@ -8,6 +8,7 @@ from app.services.race_crawler import crawl_wa_label_races
 from app.services.wa_sync_service import sync_wa_label_races
 from app.services.wa_sync_session import request_cancel
 from app.services.pilot_edition_date import lookup_pilot_race_date, lookup_pilot_years
+from app.services.race_edition_service import list_upcoming_editions
 from typing import List
 
 router = APIRouter(prefix="/api/races", tags=["races"])
@@ -98,6 +99,12 @@ def get_pilot_edition_dates(
     if not parsed:
         raise HTTPException(status_code=400, detail="years 파라미터 필요 (예: 2021,2025)")
     return lookup_pilot_years(parsed, fetch_external=fetch_external)
+
+
+@router.get("/editions/upcoming", response_model=List[dict])
+def get_upcoming_race_editions(limit: int = 80):
+    """훈련노트 목표 대회 선택 — upcoming/일정 미정 edition (CREW 전용)."""
+    return list_upcoming_editions(limit=limit)
 
 
 @router.get("/{race_id}", response_model=dict)
