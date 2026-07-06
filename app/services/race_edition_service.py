@@ -13,6 +13,10 @@ def list_upcoming_editions(limit: int = 80) -> list[dict[str, Any]]:
     PostgREST 임베디드 리소스(`races!inner(...)` + dotted 필터)는 운영 Supabase에서
     "permission denied for schema review"로 실패해 두 단계 조회로 대체함
     (race_plan_service._fetch_race_info 등 기존 단일 테이블 조회 패턴과 동일하게 안전한 방식만 사용).
+
+    review_db()의 기본값(live=False)은 로컬 테스트 Supabase 프로젝트를 가리켜 review
+    스키마 권한이 없다 — race_plan.py가 live=True를 기본값으로 쓰는 것과 동일하게
+    이 엔드포인트도 항상 실서버(LIVE) Supabase를 조회한다.
     """
     from app.core.database import review_db
 
@@ -20,7 +24,7 @@ def list_upcoming_editions(limit: int = 80) -> list[dict[str, Any]]:
     cap = min(max(limit, 1), 200)
 
     editions = (
-        review_db()
+        review_db(live=True)
         .table("race_editions")
         .select("id, name, year, race_date, race_id")
         .eq("is_active", True)
@@ -34,7 +38,7 @@ def list_upcoming_editions(limit: int = 80) -> list[dict[str, Any]]:
     races_by_id: dict[int, dict[str, Any]] = {}
     if race_ids:
         races_rows = (
-            review_db()
+            review_db(live=True)
             .table("races")
             .select("id, name, is_active")
             .in_("id", race_ids)
