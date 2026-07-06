@@ -24,6 +24,7 @@ uvicorn main:app --reload 명령으로 실행한다.
 
 [헬스체크 엔드포인트]
   GET /          → {"status": "ok", "env": "development|production"}
+  GET /health    → {"status": "ok"} (프로세스 생존, DB 미조회 — CI/CD 헬스체크용)
   GET /health/db → public / review / crew 스키마 각 1건 조회 확인
                    실패 시 {"status": "error", "detail": "..."}
 """
@@ -94,6 +95,12 @@ app.include_router(coach.router)
 @app.get("/")
 def health_check():
     return {"status": "ok", "env": settings.app_env}
+
+
+@app.get("/health")
+def health():
+    """프로세스 생존 확인 — DB 등 외부 의존성 없음 (CI/CD·systemd용)."""
+    return {"status": "ok"}
 
 
 @app.get("/health/db")
