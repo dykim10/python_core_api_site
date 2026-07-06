@@ -72,6 +72,23 @@ def _race_summary_batch_job() -> None:
     logger.info(f"[스케줄] 대회 종합 AI 요약 배치 완료: {result}")
 
 
+def _instagram_fetch_job() -> None:
+    from app.services import instagram_service
+    from app.core.config import settings
+
+    if not settings.apify_api_key:
+        logger.warning("[스케줄] Instagram 수집 건너뜀 — APIFY_API_KEY 미설정")
+        return
+
+    handle = settings.instagram_username or "pac_run"
+    logger.info(f"[스케줄] Instagram 피드 수집 시작 (@{handle})")
+    try:
+        saved = instagram_service.fetch_crew_instagram(username=handle, max_items=12, live=False)
+        logger.info(f"[스케줄] Instagram 수집 완료: {saved}건")
+    except Exception as e:
+        logger.error(f"[스케줄] Instagram 수집 실패: {e}")
+
+
 def start() -> None:
     scheduler.add_job(
         _backup_job,
@@ -101,6 +118,13 @@ def start() -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    scheduler.add_job(
+        _instagram_fetch_job,
+        CronTrigger(hour=4, minute=0, timezone="Asia/Seoul"),
+        id="daily_instagram_fetch",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
 
     # 서버 시작 후 90분 1회 테스트 발송 (MAILING_TEST_EMAIL 환경변수 설정 시에만)
     from app.core.config import settings
@@ -123,7 +147,8 @@ def start() -> None:
         "daily_backup 매일 00:00 KST / "
         "batch_race_summaries 매일 03:00 KST / "
         "wa_label_sync 매년 1/15 02:00 KST (당해 season) / "
-        "weekly_crew_mailing 매주 월요일 06:00 KST"
+        "weekly_crew_mailing 매주 월요일 06:00 KST / "
+        "daily_instagram_fetch 매일 04:00 KST"
     )
 
 

@@ -11,6 +11,10 @@ TASK_MODEL = {
     "parse_image": MODEL_TIER_LIGHT,
     "race_plan": MODEL_TIER_HEAVY,
     "race_summarize": MODEL_TIER_LIGHT,
+    "coach_feedback": MODEL_TIER_LIGHT,
+    "coach_weekly_report": MODEL_TIER_HEAVY,
+    "coach_schedule": MODEL_TIER_HEAVY,
+    "coach_inbody": MODEL_TIER_LIGHT,
 }
 
 

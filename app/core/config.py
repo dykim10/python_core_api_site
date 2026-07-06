@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     solapi_api_secret: str = ""
     sms_sender: str = ""
     apify_api_key: str = ""
+    instagram_username: str = "pac_run"
     backup_api_key: str = ""
     backup_retention_days: int = 7
 

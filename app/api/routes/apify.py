@@ -11,12 +11,11 @@ YouTube 영상 검색과 Instagram 포스트 수집을 Apify Actor 로 처리한
     → [{title, url, thumbnail_url, channel, view_count, published_at, description}]
 
   GET  /api/instagram/posts
-    username  : 인스타그램 계정명 (기본 "pac.run")
     limit     : 최대 반환 수 (기본 12)
     → crew.instagram_cache 에서 최신 캐시 조회
 
   POST /api/instagram/fetch
-    username     : 인스타그램 계정명 (기본 "pac.run")
+    username     : 인스타그램 계정명 (기본 pac_run)
     max_items    : 수집 포스트 수 (기본 12)
     → Apify 실행 → crew.instagram_cache upsert → 저장된 포스트 수 반환
 
@@ -27,16 +26,14 @@ YouTube 영상 검색과 Instagram 포스트 수집을 Apify Actor 로 처리한
 [DB]
   Instagram 캐시는 crew.instagram_cache 에 upsert (post_id 기준 중복 제거)
 """
-from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from app.services.apify_client import run_actor
-from app.core.database import crew_db
+from app.services import instagram_service
 
 router = APIRouter(tags=["apify"])
 
 YOUTUBE_ACTOR = "streamers/youtube-scraper"
-INSTAGRAM_ACTOR = "apify/instagram-scraper"
 
 
 # ─── YouTube ────────────────────────────────────────────────
@@ -81,7 +78,7 @@ def search_youtube(
 # ─── Instagram ───────────────────────────────────────────────
 
 class InstagramFetchRequest(BaseModel):
-    username: str = "pac.run"
+    username: str = "pac_run"
     max_items: int = 12
 
 
@@ -90,70 +87,24 @@ class InstagramFetchResponse(BaseModel):
     username: str
 
 
-def _map_media_type(raw: str | None) -> str:
-    mapping = {"Image": "IMAGE", "Video": "VIDEO", "Sidecar": "CAROUSEL_ALBUM"}
-    return mapping.get(raw or "", "IMAGE")
-
-
 @router.get("/api/instagram/posts")
 def get_instagram_posts(
-    username: str = Query("pac.run"),
     limit: int = Query(12, ge=1, le=50),
 ):
     try:
-        rows = (
-            crew_db()
-            .table("instagram_cache")
-            .select("*")
-            .order("posted_at", desc=True)
-            .limit(limit)
-            .execute()
-        )
-        return rows.data
+        return instagram_service.list_crew_instagram(limit=limit)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Instagram 캐시 조회 실패: {e}")
+        raise HTTPException(status_code=500, detail=f"Instagram 캐시 조회 실패: {e}") from e
 
 
 @router.post("/api/instagram/fetch", response_model=InstagramFetchResponse)
 def fetch_instagram(req: InstagramFetchRequest):
     try:
-        items = run_actor(
-            INSTAGRAM_ACTOR,
-            run_input={
-                "usernames": [req.username],
-                "resultsLimit": req.max_items,
-            },
+        saved = instagram_service.fetch_crew_instagram(
+            username=req.username,
+            max_items=req.max_items,
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Apify Instagram 수집 실패: {e}")
+        raise HTTPException(status_code=502, detail=f"Apify Instagram 수집 실패: {e}") from e
 
-    now = datetime.now(timezone.utc).isoformat()
-    records = []
-    for item in items:
-        post_id = str(item.get("id") or item.get("shortCode") or "")
-        if not post_id:
-            continue
-        media_url = item.get("videoUrl") or item.get("displayUrl") or ""
-        records.append({
-            "post_id": post_id,
-            "media_type": _map_media_type(item.get("type")),
-            "media_url": media_url,
-            "thumbnail_url": item.get("displayUrl"),
-            "caption": (item.get("caption") or "")[:2000],
-            "like_count": item.get("likesCount") or 0,
-            "comments_count": item.get("commentsCount") or 0,
-            "permalink": item.get("url") or f"https://www.instagram.com/p/{item.get('shortCode', '')}/",
-            "posted_at": item.get("timestamp"),
-            "fetched_at": now,
-        })
-
-    if records:
-        try:
-            crew_db().table("instagram_cache").upsert(
-                records,
-                on_conflict="post_id",
-            ).execute()
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Instagram 캐시 저장 실패: {e}")
-
-    return InstagramFetchResponse(saved=len(records), username=req.username)
+    return InstagramFetchResponse(saved=saved, username=req.username.lstrip("@"))

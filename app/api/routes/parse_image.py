@@ -81,7 +81,8 @@ PARSE_PROMPT_TEMPLATE = """\
   "avg_heart_rate": 숫자 (정수, bpm),
   "is_indoor": true/false (트레드밀/실내이면 true, 실외면 false),
   "elevation_m": 숫자 (누적 고도, 미터),
-  "has_map": true/false (지도 포함 여부)
+  "has_map": true/false (지도 포함 여부),
+  "vo2max": 숫자 (시계/앱에 VO2max 표시 시, 소수 1자리. 없으면 null)
 }}
 
 [app_name 규칙] 앱 로고·UI 레이아웃으로 판별. 아래 값 중 하나:
@@ -135,6 +136,7 @@ class ParseImageResponse(BaseModel):
     is_indoor: bool = False
     elevation_m: Optional[float] = None
     has_map: Optional[bool] = None
+    vo2max: Optional[float] = None
     raw_parsed: dict = {}
 
 
@@ -227,6 +229,7 @@ def _parse_image_bytes(image_bytes: bytes, media_type: str) -> dict:
         "is_indoor": is_indoor,
         "elevation_m": parsed.get("elevation_m"),
         "has_map": parsed.get("has_map"),
+        "vo2max": parsed.get("vo2max"),
         "raw_parsed": parsed,
     }
 
@@ -245,6 +248,7 @@ class ParseImageEphemeralResponse(BaseModel):
     is_indoor: bool = False
     elevation_m: Optional[float] = None
     has_map: Optional[bool] = None
+    vo2max: Optional[float] = None
     raw_parsed: dict = {}
 
 
