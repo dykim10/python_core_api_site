@@ -7,6 +7,7 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+node_modules/
 
 # 로컬 전용 스크립트 (EC2 배포 제외)
 sync_live_to_local.py

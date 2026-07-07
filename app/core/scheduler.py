@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 logger = logging.getLogger(__name__)
 
@@ -89,6 +90,11 @@ def _instagram_fetch_job() -> None:
         logger.error(f"[스케줄] Instagram 수집 실패: {e}")
 
 
+def _scheduled_sms_job() -> None:
+    from app.services.scheduled_sms_service import process_scheduled_sms
+    process_scheduled_sms()
+
+
 def start() -> None:
     scheduler.add_job(
         _backup_job,
@@ -125,6 +131,15 @@ def start() -> None:
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    scheduler.add_job(
+        _scheduled_sms_job,
+        IntervalTrigger(seconds=60),
+        id="process_scheduled_sms",
+        replace_existing=True,
+        max_instances=1,
+        misfire_grace_time=300,
+        coalesce=True,
+    )
 
     # 서버 시작 후 90분 1회 테스트 발송 (MAILING_TEST_EMAIL 환경변수 설정 시에만)
     from app.core.config import settings
@@ -148,7 +163,8 @@ def start() -> None:
         "batch_race_summaries 매일 03:00 KST / "
         "wa_label_sync 매년 1/15 02:00 KST (당해 season) / "
         "weekly_crew_mailing 매주 월요일 06:00 KST / "
-        "daily_instagram_fetch 매일 04:00 KST"
+        "daily_instagram_fetch 매일 04:00 KST / "
+        "process_scheduled_sms 매 60초"
     )
 
 
