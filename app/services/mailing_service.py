@@ -164,146 +164,178 @@ def build_weekly_html(stats: dict) -> str:
         </tr>"""
 
     motivational = _pick_motivational(week_num)
+    year = datetime.now().year
+    font_display = "'Bebas Neue', 'Arial Black', Arial, sans-serif"
+    font_body = "'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', Arial, sans-serif"
 
     return f"""<!DOCTYPE html>
-<html lang="ko">
+<html lang="ko" xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta name="x-apple-disable-message-reformatting">
 <title>CREW WEEKLY DISPATCH — {issue_date}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
 <style>
-  * {{ margin:0;padding:0;box-sizing:border-box; }}
-  body {{ background-color:#0C0C0C;font-family:'Noto Sans KR',-apple-system,sans-serif;-webkit-font-smoothing:antialiased; }}
+  body, table, td, a {{ -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }}
+  table, td {{ mso-table-lspace: 0pt; mso-table-rspace: 0pt; }}
+  body {{ margin: 0 !important; padding: 0 !important; width: 100% !important; }}
+  @media only screen and (max-width: 620px) {{
+    .email-container {{ width: 100% !important; }}
+    .px-40 {{ padding-left: 20px !important; padding-right: 20px !important; }}
+    .stat-col {{ display: block !important; width: 100% !important; padding: 0 0 8px 0 !important; }}
+    .hero-title {{ font-size: 40px !important; }}
+    .hide-mobile {{ display: none !important; }}
+  }}
 </style>
 </head>
-<body>
-<div style="background-color:#0C0C0C;padding:40px 20px;">
-<div style="max-width:600px;margin:0 auto;background-color:#141010;">
+<body style="margin:0;padding:0;background-color:#0C0C0C;">
 
-  <!-- 상단 골드 라인 -->
-  <div style="height:3px;background-color:#E5AD16;"></div>
-
-  <!-- 헤더 -->
-  <div style="background-color:#141010;padding:20px 40px;border-bottom:1px solid #1F1C1C;">
-    <table style="width:100%;border-collapse:collapse;">
-      <tr>
-        <td style="vertical-align:middle;">
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:5px;color:#E5AD16;line-height:1;">PAC RUN</span>
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:16px;color:#2A2020;padding:0 10px;">/</span>
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:10px;letter-spacing:4px;color:#3D3535;">CREW · SINCE 2024</span>
-        </td>
-        <td style="text-align:right;vertical-align:middle;">
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:9px;letter-spacing:4px;color:#3A3030;">ISSUE #{week_num}</span>
-        </td>
-      </tr>
-    </table>
-  </div>
-
-  <!-- 히어로 배너 -->
-  <div style="background-color:#0F0D0D;padding:48px 40px 40px;position:relative;overflow:hidden;border-bottom:3px solid #E5AD16;">
-    <div style="position:absolute;bottom:-20px;right:-10px;font-family:'Bebas Neue',sans-serif;font-size:180px;color:transparent;-webkit-text-stroke:1px rgba(229,173,22,0.05);letter-spacing:0;line-height:1;pointer-events:none;">W</div>
-
-    <div style="margin-bottom:24px;">
-      <span style="font-family:'Bebas Neue',sans-serif;font-size:10px;letter-spacing:5px;color:#3A3030;margin-right:10px;">WK</span>
-      <span style="display:inline-block;width:28px;height:1px;background-color:#2A2020;vertical-align:middle;margin-right:10px;"></span>
-      <span style="display:inline-block;background-color:#E5AD16;color:#0F0D0D;font-family:'Bebas Neue',sans-serif;font-size:10px;letter-spacing:4px;padding:5px 14px;">WEEKLY DISPATCH</span>
-    </div>
-
-    <div style="font-family:'Bebas Neue',sans-serif;font-size:56px;letter-spacing:2px;color:#FFFFFF;line-height:1;">
-      CREW<br><span style="color:#E5AD16;">WEEKLY</span>
-    </div>
-
-    <div style="margin-top:20px;padding-top:16px;border-top:1px solid #1F1C1C;">
-      <span style="font-family:'Bebas Neue',sans-serif;font-size:10px;letter-spacing:3px;color:#2E2828;">{week_start} — {week_end} · {issue_date} 발행</span>
-    </div>
-  </div>
-
-  <!-- 이번 주 요약 카드 -->
-  <div style="background-color:#FFFFFF;padding:44px 40px 36px;">
-
-    <span style="font-family:'Bebas Neue',sans-serif;font-size:10px;letter-spacing:5px;color:#E5AD16;display:block;margin-bottom:24px;">— 이번 주 크루 현황</span>
-
-    <table style="width:100%;border-collapse:collapse;border-spacing:0;margin-bottom:32px;" role="presentation">
-      <tr>
-        <td style="width:34%;padding-right:7px;vertical-align:top;">
-          <div style="background-color:#0F0D0D;padding:22px 16px;">
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:9px;letter-spacing:4px;color:#333;margin-bottom:8px;">TOTAL KM</div>
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:48px;color:#E5AD16;line-height:1;">{total_km}</div>
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:10px;color:#444;letter-spacing:3px;margin-top:6px;">KM THIS WEEK</div>
-          </div>
-        </td>
-        <td style="width:33%;padding-right:4px;padding-left:3px;vertical-align:top;">
-          <div style="background-color:#F8F8F6;border:1px solid #ECECEA;padding:22px 16px;">
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:9px;letter-spacing:4px;color:#888;margin-bottom:8px;">RUNNERS</div>
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:48px;color:#1A1212;line-height:1;">{active_count}</div>
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:10px;color:#888;letter-spacing:3px;margin-top:6px;">MEMBERS</div>
-          </div>
-        </td>
-        <td style="width:33%;padding-left:7px;vertical-align:top;">
-          <div style="background-color:#F8F8F6;border:1px solid #ECECEA;padding:22px 16px;">
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:9px;letter-spacing:4px;color:#888;margin-bottom:8px;">AVG / MEMBER</div>
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:48px;color:#1A1212;line-height:1;">{avg_km}</div>
-            <div style="font-family:'Bebas Neue',sans-serif;font-size:10px;color:#888;letter-spacing:3px;margin-top:6px;">KM AVG</div>
-          </div>
-        </td>
-      </tr>
-    </table>
-
-    <!-- 리더보드 -->
-    <span style="font-family:'Bebas Neue',sans-serif;font-size:10px;letter-spacing:5px;color:#E5AD16;display:block;margin-bottom:16px;">— 이번 주 TOP RUNNERS</span>
-
-    <table style="width:100%;border-collapse:collapse;background-color:#0F0D0D;margin-bottom:36px;">
-      <tr>
-        <td colspan="3" style="padding:10px 16px;background-color:#141010;border-bottom:1px solid #1A1818;">
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:9px;letter-spacing:4px;color:#3A3030;">RANK</span>
-        </td>
-      </tr>
-      {leaderboard_rows}
-    </table>
-
-    <!-- 동기부여 메시지 -->
-    <div style="background-color:#0F0D0D;padding:24px 28px;border-left:3px solid #E5AD16;margin-bottom:0;">
-      <div style="font-family:'Bebas Neue',sans-serif;font-size:9px;letter-spacing:5px;color:#E5AD16;margin-bottom:12px;">THIS WEEK'S WORD</div>
-      <div style="font-size:14px;font-weight:300;color:#B0A898;line-height:1.9;">{motivational}</div>
-    </div>
-
-  </div>
-
-  <!-- CTA -->
-  <div style="background-color:#EDEBE5;padding:28px 40px;border-top:1px solid #DDD8C8;text-align:center;">
-    <a href="https://crew.pac-run.com/running-logs/create"
-       style="display:inline-block;background-color:#E5AD16;color:#0F0D0D;font-family:'Bebas Neue',sans-serif;font-size:16px;letter-spacing:6px;padding:18px 52px;text-decoration:none;border-bottom:4px solid #B8881A;">
-      이번 주 기록 업로드하기
-    </a>
-    <div style="margin-top:14px;">
-      <a href="https://crew.pac-run.com" style="font-size:11px;color:#A09880;text-decoration:none;letter-spacing:2px;">크루 홈페이지 방문하기 →</a>
-    </div>
-  </div>
-
-  <!-- 푸터 -->
-  <div style="background-color:#0F0D0D;padding:28px 40px;border-top:3px solid #E5AD16;">
-    <table style="width:100%;border-collapse:collapse;">
-      <tr>
-        <td style="vertical-align:bottom;">
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:5px;color:#E5AD16;display:block;">PAC RUN CREW</span>
-          <span style="font-family:'Bebas Neue',sans-serif;font-size:9px;letter-spacing:4px;color:#2A2020;display:block;margin-top:4px;">EST. 2024</span>
-        </td>
-        <td style="text-align:right;vertical-align:bottom;">
-          <a href="https://crew.pac-run.com" style="font-size:11px;color:#3D3535;text-decoration:none;letter-spacing:1px;display:block;line-height:2;">홈페이지</a>
-          <a href="https://crew.pac-run.com/boards/qna" style="font-size:11px;color:#3D3535;text-decoration:none;letter-spacing:1px;display:block;line-height:2;">문의하기</a>
-        </td>
-      </tr>
-    </table>
-    <div style="margin-top:16px;padding-top:14px;border-top:1px solid #1A1818;font-size:9px;color:#2A2020;letter-spacing:2px;text-align:center;">
-      © {datetime.now().year} PAC RUN. ALL RIGHTS RESERVED. &nbsp;|&nbsp; 매주 월요일 오전 6시 발송
-    </div>
-  </div>
-
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;">
+  이번 주 크루 달리기 현황 — 총 {total_km}km, {active_count}명 참여&nbsp;&zwnj;
 </div>
-</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0C0C0C;">
+<tr><td align="center" style="padding:32px 12px;">
+
+<table role="presentation" class="email-container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background-color:#141010;">
+
+  <tr><td height="3" style="background-color:#E5AD16;font-size:0;line-height:0;">&nbsp;</td></tr>
+
+  <tr>
+    <td class="px-40" style="padding:20px 40px;background-color:#141010;border-bottom:1px solid #1F1C1C;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="font-family:{font_display};font-size:20px;letter-spacing:5px;color:#E5AD16;">PAC RUN</td>
+          <td class="hide-mobile" style="font-family:{font_display};font-size:14px;color:#2A2020;padding:0 8px;width:16px;">/</td>
+          <td class="hide-mobile" style="font-family:{font_display};font-size:9px;letter-spacing:4px;color:#3D3535;">CREW · SINCE 2024</td>
+          <td align="right" style="font-family:{font_display};font-size:9px;letter-spacing:4px;color:#3A3030;">ISSUE #{week_num}</td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <tr>
+    <td class="px-40" style="padding:40px 40px 32px;background-color:#0F0D0D;border-bottom:3px solid #E5AD16;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="padding-bottom:20px;">
+            <span style="font-family:{font_display};font-size:9px;letter-spacing:5px;color:#3A3030;">WK</span>
+            <span class="hide-mobile" style="display:inline-block;width:24px;height:1px;background-color:#2A2020;vertical-align:middle;margin:0 8px;"></span>
+            <span style="display:inline-block;background-color:#E5AD16;color:#0F0D0D;font-family:{font_display};font-size:9px;letter-spacing:4px;padding:5px 12px;">WEEKLY DISPATCH</span>
+          </td>
+          <td align="right" class="hide-mobile" style="font-family:{font_display};font-size:80px;color:#1A1414;line-height:1;vertical-align:top;">W</td>
+        </tr>
+        <tr>
+          <td colspan="2">
+            <p class="hero-title" style="margin:0;font-family:{font_display};font-size:48px;letter-spacing:2px;color:#FFFFFF;line-height:1;">CREW<br><span style="color:#E5AD16;">WEEKLY</span></p>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="2" style="padding-top:16px;border-top:1px solid #1F1C1C;">
+            <p style="margin:0;font-family:{font_display};font-size:9px;letter-spacing:3px;color:#2E2828;">{week_start} — {week_end} · {issue_date} 발행</p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <tr>
+    <td class="px-40" style="padding:36px 40px 32px;background-color:#FFFFFF;">
+      <p style="margin:0 0 24px;font-family:{font_display};font-size:9px;letter-spacing:5px;color:#E5AD16;">— 이번 주 크루 현황</p>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;">
+        <tr>
+          <td class="stat-col" width="34%" style="padding-right:6px;vertical-align:top;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0F0D0D;">
+              <tr><td style="padding:20px 14px;">
+                <p style="margin:0 0 8px;font-family:{font_display};font-size:8px;letter-spacing:4px;color:#444444;">TOTAL KM</p>
+                <p style="margin:0;font-family:{font_display};font-size:42px;color:#E5AD16;line-height:1;">{total_km}</p>
+                <p style="margin:6px 0 0;font-family:{font_display};font-size:9px;color:#555555;letter-spacing:3px;">KM THIS WEEK</p>
+              </td></tr>
+            </table>
+          </td>
+          <td class="stat-col" width="33%" style="padding:0 3px;vertical-align:top;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F8F8F6;border:1px solid #ECECEA;">
+              <tr><td style="padding:20px 14px;">
+                <p style="margin:0 0 8px;font-family:{font_display};font-size:8px;letter-spacing:4px;color:#888888;">RUNNERS</p>
+                <p style="margin:0;font-family:{font_display};font-size:42px;color:#1A1212;line-height:1;">{active_count}</p>
+                <p style="margin:6px 0 0;font-family:{font_display};font-size:9px;color:#888888;letter-spacing:3px;">MEMBERS</p>
+              </td></tr>
+            </table>
+          </td>
+          <td class="stat-col" width="33%" style="padding-left:6px;vertical-align:top;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F8F8F6;border:1px solid #ECECEA;">
+              <tr><td style="padding:20px 14px;">
+                <p style="margin:0 0 8px;font-family:{font_display};font-size:8px;letter-spacing:4px;color:#888888;">AVG / MEMBER</p>
+                <p style="margin:0;font-family:{font_display};font-size:42px;color:#1A1212;line-height:1;">{avg_km}</p>
+                <p style="margin:6px 0 0;font-family:{font_display};font-size:9px;color:#888888;letter-spacing:3px;">KM AVG</p>
+              </td></tr>
+            </table>
+          </td>
+        </tr>
+      </table>
+
+      <p style="margin:0 0 14px;font-family:{font_display};font-size:9px;letter-spacing:5px;color:#E5AD16;">— 이번 주 TOP RUNNERS</p>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:28px;background-color:#0F0D0D;">
+        <tr>
+          <td colspan="3" style="padding:10px 16px;background-color:#141010;border-bottom:1px solid #1A1818;">
+            <span style="font-family:{font_display};font-size:8px;letter-spacing:4px;color:#3A3030;">RANK</span>
+          </td>
+        </tr>
+        {leaderboard_rows}
+      </table>
+
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#0F0D0D;border-left:3px solid #E5AD16;">
+        <tr>
+          <td style="padding:22px 24px;">
+            <p style="margin:0 0 10px;font-family:{font_display};font-size:8px;letter-spacing:5px;color:#E5AD16;">THIS WEEK'S WORD</p>
+            <p style="margin:0;font-family:{font_body};font-size:14px;font-weight:300;color:#B0A898;line-height:1.85;">{motivational}</p>
+          </td>
+        </tr>
+      </table>
+    </td>
+  </tr>
+
+  <tr>
+    <td class="px-40" style="padding:28px 40px;background-color:#EDEBE5;border-top:1px solid #DDD8C8;text-align:center;">
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center">
+        <tr>
+          <td align="center" style="background-color:#E5AD16;border-bottom:4px solid #B8881A;">
+            <a href="https://crew.pac-run.com/running-logs/create" target="_blank" style="display:inline-block;padding:16px 44px;font-family:{font_display};font-size:14px;font-weight:bold;letter-spacing:5px;color:#0F0D0D;text-decoration:none;">이번 주 기록 업로드하기</a>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:14px 0 0;">
+        <a href="https://crew.pac-run.com" style="font-family:{font_body};font-size:11px;color:#A09880;text-decoration:none;letter-spacing:1px;">크루 홈페이지 방문하기 →</a>
+      </p>
+    </td>
+  </tr>
+
+  <tr>
+    <td class="px-40" style="padding:28px 40px 24px;background-color:#0F0D0D;border-top:3px solid #E5AD16;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td style="vertical-align:bottom;">
+            <p style="margin:0;font-family:{font_display};font-size:16px;letter-spacing:5px;color:#E5AD16;">PAC RUN CREW</p>
+            <p style="margin:4px 0 0;font-family:{font_display};font-size:8px;letter-spacing:4px;color:#2A2020;">EST. 2024</p>
+          </td>
+          <td align="right" class="hide-mobile" style="vertical-align:bottom;">
+            <a href="https://crew.pac-run.com" style="font-family:{font_body};font-size:11px;color:#3D3535;text-decoration:none;display:block;line-height:2;">홈페이지</a>
+            <a href="https://crew.pac-run.com/boards/qna" style="font-family:{font_body};font-size:11px;color:#3D3535;text-decoration:none;display:block;line-height:2;">문의하기</a>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:16px 0 0;padding-top:14px;border-top:1px solid #1A1818;font-family:{font_body};font-size:8px;color:#2A2020;letter-spacing:2px;text-align:center;text-transform:uppercase;">
+        © {year} PAC RUN. ALL RIGHTS RESERVED. &nbsp;|&nbsp; 매주 월요일 오전 6시 발송
+      </p>
+    </td>
+  </tr>
+
+</table>
+</td></tr>
+</table>
 </body>
 </html>"""
 
