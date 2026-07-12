@@ -7,7 +7,7 @@ Claude API 호출 + DB 캐시.
 import json
 import logging
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import anthropic
@@ -395,7 +395,7 @@ NSM 역치 판정: {nsm or '심박 데이터 없음'}
     feedback = _call_claude(FEEDBACK_MODEL, SYSTEM_PROMPT, user_prompt, FEEDBACK_TIMEOUT)
     feedback = _normalize_report(feedback)
 
-    now = datetime.now().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     crew_db().table("running_logs").update({
         "coach_feedback": feedback,
         "feedback_at": now,

@@ -16,6 +16,7 @@ import io
 import uuid
 import boto3
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -104,7 +105,7 @@ async def resize_to_webp(
         raise HTTPException(status_code=400, detail=f"이미지 크기는 {mb}MB 이하여야 합니다.")
 
     if not folder:
-        now = datetime.now()
+        now = datetime.now(ZoneInfo("Asia/Seoul"))
         folder = f"photo-galleries/{now.year}/{now.month:02d}"
 
     try:

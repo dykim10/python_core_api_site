@@ -14,6 +14,7 @@ GET /api/mailing/preview
 """
 import logging
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -62,7 +63,7 @@ def schedule_test(req: ScheduleTestRequest):
         from app.core.scheduler import scheduler
         from apscheduler.triggers.date import DateTrigger
 
-        run_at = datetime.now() + timedelta(minutes=req.delay_minutes)
+        run_at = datetime.now(ZoneInfo("Asia/Seoul")) + timedelta(minutes=req.delay_minutes)
         email = req.email
         live = req.live
 

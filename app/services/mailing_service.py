@@ -11,7 +11,8 @@
   send_weekly_mailing(...)   → 집계 → HTML 빌드 → Resend 발송
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from app.core.database import crew_db, public_db
 from app.services.email_service import send_email
@@ -19,13 +20,15 @@ from app.utils.crypto import decrypt
 
 logger = logging.getLogger(__name__)
 
+KST = ZoneInfo("Asia/Seoul")
+
 
 # ── 통계 집계 ─────────────────────────────────────────────────────────────────
 
 def get_weekly_stats(live: bool = True) -> dict:
-    now = datetime.now()
+    now = datetime.now(KST)
     week_ago = now - timedelta(days=7)
-    week_ago_str = week_ago.isoformat()
+    week_ago_str = week_ago.astimezone(timezone.utc).isoformat()
 
     try:
         logs_res = (
@@ -164,7 +167,7 @@ def build_weekly_html(stats: dict) -> str:
         </tr>"""
 
     motivational = _pick_motivational(week_num)
-    year = datetime.now().year
+    year = datetime.now(KST).year
     font_display = "'Bebas Neue', 'Arial Black', Arial, sans-serif"
     font_body = "'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', Arial, sans-serif"
 

@@ -2,6 +2,7 @@
 대회 정보 CRUD 라우터 (app/api/routes/races.py)
 """
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException
 from app.core.database import review_db
 from app.services.race_crawler import crawl_wa_label_races
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/races", tags=["races"])
 @router.get("/crawl-wa-labels", response_model=List[dict])
 def get_wa_label_races(year: int = 0, organiser: bool = False):
     """World Athletics Label Road Races 캘린더를 GraphQL로 수집해 반환한다."""
-    target_year = year if year > 0 else datetime.now().year
+    target_year = year if year > 0 else datetime.now(ZoneInfo("Asia/Seoul")).year
     races = crawl_wa_label_races(target_year, fetch_organiser=organiser)
     if not races:
         raise HTTPException(
@@ -63,7 +64,7 @@ def sync_wa_label_races_endpoint(
     session_id: str = "",
 ):
     """WA 시즌 Label Road Races → races upsert + 연도별 공인/비공인 (editions 없음)."""
-    target_year = year if year > 0 else datetime.now().year
+    target_year = year if year > 0 else datetime.now(ZoneInfo("Asia/Seoul")).year
     sid = session_id.strip() or None
     result = sync_wa_label_races(
         target_year,

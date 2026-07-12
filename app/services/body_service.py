@@ -8,7 +8,8 @@ import json
 import logging
 import re
 import uuid
-from datetime import date, datetime, timezone, timedelta
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import boto3
@@ -60,7 +61,7 @@ def _normalize_measured_at(raw: str | None, year_in_image: bool = True) -> str |
     if not raw:
         return None
     raw = str(raw).strip()
-    today = date.today()
+    today = datetime.now(ZoneInfo("Asia/Seoul")).date()
     current_year = today.year
 
     if not re.search(r"\b\d{4}\b", raw):
@@ -89,7 +90,7 @@ def _normalize_measured_at(raw: str | None, year_in_image: bool = True) -> str |
     if parsed.date() > today:
         parsed = parsed.replace(year=current_year - 1)
 
-    tz = timezone(timedelta(hours=9))
+    tz = ZoneInfo("Asia/Seoul")
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=tz)
     return parsed.isoformat()
