@@ -25,7 +25,7 @@ def db_log(category: str, level: str, message: str, context: dict | None = None)
 
         safe_message = str(message).replace("\x00", "")[:2000]
 
-        public_db().table("system_logs").insert({
+        public_db(live=True).table("system_logs").insert({
             "source": "core",
             "category": category,
             "level": level if level in VALID_LEVELS else "info",
@@ -45,7 +45,7 @@ def cleanup_old_logs() -> None:
         from app.core.database import public_db
 
         cutoff = (datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)).isoformat()
-        public_db().table("system_logs").delete().lt("created_at", cutoff).execute()
+        public_db(live=True).table("system_logs").delete().lt("created_at", cutoff).execute()
         db_log("scheduler", "info", "system_logs 30일 초과분 정리 완료")
     except Exception as e:
         try:
