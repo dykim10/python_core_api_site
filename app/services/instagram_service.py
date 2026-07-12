@@ -149,6 +149,12 @@ def fetch_crew_instagram(
         ).execute()
         logger.info(f"[Instagram] {len(records)}건 저장 (@{handle})")
 
+    from app.services.system_log_service import db_log
+    db_log("crawler", "info", f"Instagram 수집 완료 (@{handle})", {
+        "saved": len(records),
+        "max_items": max_items,
+    })
+
     return len(records)
 
 

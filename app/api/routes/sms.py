@@ -45,7 +45,16 @@ def _check_backup_api_key(x_backup_api_key: str | None) -> None:
 
 @router.post("/send")
 async def send_sms(body: SmsSendRequest):
-    return send_many(body.phones, body.message, body.sender)
+    result = send_many(body.phones, body.message, body.sender)
+    from app.services.system_log_service import db_log
+    level = "error" if result.get("error") else "info"
+    db_log("sms", level, "Solapi 일괄 발송", {
+        "group_id": result.get("group_id"),
+        "success_count": result.get("success_count", 0),
+        "fail_count": result.get("fail_count", 0),
+        "recipient_count": len(body.phones),
+    })
+    return result
 
 
 @router.post("/scheduled/process")

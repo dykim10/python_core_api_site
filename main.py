@@ -30,7 +30,10 @@ uvicorn main:app --reload 명령으로 실행한다.
 """
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # settings(app.core.config) 가 import 되기 전에 호출해야 Parameter Store 값이
 # Settings 필드에 반영된다. import 순서를 절대 바꾸지 말 것.
@@ -90,6 +93,18 @@ app.include_router(rag.router)
 app.include_router(race_plan.router)
 app.include_router(sns.router)
 app.include_router(coach.router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    if isinstance(exc, (StarletteHTTPException, RequestValidationError)):
+        raise exc
+    from app.services.system_log_service import db_log
+    db_log("app_error", "error", str(exc)[:500], {
+        "path": str(request.url.path),
+        "exception": type(exc).__name__,
+    })
+    return JSONResponse(status_code=500, content={"detail": "서버 오류가 발생했습니다."})
 
 
 @app.get("/")

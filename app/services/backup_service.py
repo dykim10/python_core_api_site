@@ -110,6 +110,15 @@ def run_backup() -> dict:
 
     logger.info(f"[백업 완료] {s3_key} | {size_mb}MB | {elapsed}s | 삭제 {deleted}건")
 
+    from app.services.system_log_service import db_log
+    db_log("backup", "info", f"백업 완료 {s3_key}", {
+        "s3_key": s3_key,
+        "size_mb": size_mb,
+        "elapsed_sec": elapsed,
+        "deleted_old": deleted,
+        "table_count": len(table_counts),
+    })
+
     return {
         "success":     True,
         "s3_key":      s3_key,
@@ -197,4 +206,6 @@ def _s3_client():
 
 def _error(msg: str) -> dict:
     logger.error(f"[백업 실패] {msg}")
+    from app.services.system_log_service import db_log
+    db_log("backup", "error", msg[:500], {})
     return {"success": False, "error": msg}

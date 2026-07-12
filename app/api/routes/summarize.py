@@ -69,6 +69,18 @@ def summarize_review(req: SummarizeRequest):
             sentiment=sentiment,
         )
     except json.JSONDecodeError:
+        from app.services.system_log_service import db_log
+        db_log("ai", "error", "AI 응답 파싱 실패", {
+            "model": model_for("review_summarize"),
+            "endpoint": "/api/summarize",
+            "exception": "JSONDecodeError",
+        })
         raise HTTPException(status_code=500, detail=f"AI 응답 파싱 실패: {raw}")
     except Exception as e:
+        from app.services.system_log_service import db_log
+        db_log("ai", "error", str(e)[:500], {
+            "model": model_for("review_summarize"),
+            "endpoint": "/api/summarize",
+            "exception": type(e).__name__,
+        })
         raise HTTPException(status_code=500, detail=str(e))
