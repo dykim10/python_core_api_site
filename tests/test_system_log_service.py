@@ -13,7 +13,7 @@ class SystemLogServiceTests(unittest.TestCase):
 
         db_log("backup", "info", "백업 완료", {"s3_key": "backups/test.json.gz"})
 
-        mock_public_db.assert_called_once_with(live=True)
+        mock_public_db.assert_called_once_with()
         mock_public_db.return_value.table.assert_called_once_with("system_logs")
         payload = mock_table.insert.call_args[0][0]
         self.assertEqual(payload["source"], "core")
