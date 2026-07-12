@@ -4,6 +4,7 @@ APScheduler 설정 (app/core/scheduler.py)
 FastAPI lifespan 에서 시작/종료.
 현재 등록된 작업:
   - daily_backup           : 매일 00:00 KST — DB 전체 백업
+  - cleanup_system_logs    : 매일 00:30 KST — system_logs 30일 초과분 삭제
   - wa_label_sync          : 매년 1월 15일 02:00 KST — 당해 시즌 WA Label 공인 목록 갱신
   - weekly_crew_mailing    : 매주 월요일 06:00 KST — 주간 크루 뉴스레터 발송
   - weekly_mailing_test    : 서버 시작 후 90분 1회 — 테스트 발송 (MAILING_TEST_EMAIL 설정 시)
@@ -11,6 +12,7 @@ FastAPI lifespan 에서 시작/종료.
 import logging
 from datetime import datetime, timedelta
 
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED, EVENT_JOB_MISSED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
@@ -19,6 +21,33 @@ from apscheduler.triggers.interval import IntervalTrigger
 logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler(timezone="Asia/Seoul")
+
+SERVICE_SUMMARY_JOBS = frozenset({
+    "daily_backup",
+    "batch_race_summaries",
+    "weekly_crew_mailing",
+    "daily_instagram_fetch",
+    "wa_label_sync",
+    "process_scheduled_sms",
+    "cleanup_system_logs",
+})
+
+
+def _job_listener(event) -> None:
+    from app.services.system_log_service import db_log
+
+    ctx = {
+        "job_id": event.job_id,
+        "scheduled_run_time": str(getattr(event, "scheduled_run_time", "")),
+    }
+    if event.code == EVENT_JOB_ERROR:
+        db_log("scheduler", "error", f"{event.job_id} 실패: {event.exception}", ctx)
+    elif event.code == EVENT_JOB_MISSED:
+        db_log("scheduler", "warning", f"{event.job_id} 실행 누락", ctx)
+    elif event.code == EVENT_JOB_EXECUTED:
+        if event.job_id in SERVICE_SUMMARY_JOBS:
+            return
+        db_log("scheduler", "info", f"{event.job_id} 성공", ctx)
 
 
 def _backup_job() -> None:
@@ -54,6 +83,13 @@ def _wa_sync_job() -> None:
         result["decertified"],
         result["skipped"],
     )
+    from app.services.system_log_service import db_log
+    db_log("crawler", "info", f"WA Label sync season={season}", {
+        "inserted": result["inserted"],
+        "updated": result["updated"],
+        "decertified": result["decertified"],
+        "skipped": result["skipped"],
+    })
 
 
 def _weekly_mailing_job() -> None:
@@ -88,6 +124,15 @@ def _instagram_fetch_job() -> None:
         logger.info(f"[스케줄] Instagram 수집 완료: {saved}건")
     except Exception as e:
         logger.error(f"[스케줄] Instagram 수집 실패: {e}")
+        from app.services.system_log_service import db_log
+        db_log("crawler", "error", f"Instagram 수집 실패 (@{handle})", {
+            "error": str(e)[:500],
+        })
+
+
+def _cleanup_system_logs_job() -> None:
+    from app.services.system_log_service import cleanup_old_logs
+    cleanup_old_logs()
 
 
 def _scheduled_sms_job() -> None:
@@ -100,6 +145,13 @@ def start() -> None:
         _backup_job,
         CronTrigger(hour=0, minute=0, timezone="Asia/Seoul"),
         id="daily_backup",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        _cleanup_system_logs_job,
+        CronTrigger(hour=0, minute=30, timezone="Asia/Seoul"),
+        id="cleanup_system_logs",
         replace_existing=True,
         misfire_grace_time=3600,
     )
@@ -156,10 +208,15 @@ def start() -> None:
         )
         logger.info(f"[스케줄러] 테스트 발송 예약 → {run_at.strftime('%H:%M KST')} ({test_email})")
 
+    scheduler.add_listener(
+        _job_listener,
+        EVENT_JOB_EXECUTED | EVENT_JOB_ERROR | EVENT_JOB_MISSED,
+    )
     scheduler.start()
     logger.info(
         "[스케줄러] 시작 — "
         "daily_backup 매일 00:00 KST / "
+        "cleanup_system_logs 매일 00:30 KST / "
         "batch_race_summaries 매일 03:00 KST / "
         "wa_label_sync 매년 1/15 02:00 KST (당해 season) / "
         "weekly_crew_mailing 매주 월요일 06:00 KST / "

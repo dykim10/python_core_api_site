@@ -21,8 +21,21 @@ TEST_PREFIX = "[테스트] "
 
 def process_scheduled_sms() -> None:
     """APScheduler 진입점."""
-    _send_test_messages()
-    _send_due_messages()
+    stats: dict = {"sent": 0, "failed": 0, "error": None, "group_ids": []}
+    _send_test_messages(stats)
+    _send_due_messages(stats)
+
+    if stats["sent"] + stats["failed"] == 0 and not stats["error"]:
+        return
+
+    from app.services.system_log_service import db_log
+    level = "error" if stats["error"] else ("warning" if stats["failed"] else "info")
+    db_log("sms", level, "예약 문자 처리", {
+        "sent": stats["sent"],
+        "failed": stats["failed"],
+        "group_ids": stats["group_ids"][:5],
+        "error": (stats["error"] or "")[:500] or None,
+    })
 
 
 def _utc_now_iso() -> str:
@@ -85,7 +98,7 @@ def _phones_for_users(user_ids: list[int]) -> list[str]:
     return phones
 
 
-def _send_test_messages() -> None:
+def _send_test_messages(stats: dict | None = None) -> None:
     threshold = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
     now_iso = _utc_now_iso()
 
@@ -103,6 +116,8 @@ def _send_test_messages() -> None:
         )
     except Exception:
         logger.exception("[scheduled_sms] 테스트 대상 조회 실패")
+        if stats is not None:
+            stats["error"] = "테스트 대상 조회 실패"
         return
 
     for sms in rows:
@@ -138,7 +153,12 @@ def _send_test_messages() -> None:
                 result = send_many(phones, body, sms["sender_number"])
                 if result.get("error") and not result.get("group_id"):
                     logger.error("[scheduled_sms] id=%s 테스트 발송 실패: %s", sms_id, result.get("error"))
+                    if stats is not None:
+                        stats["failed"] += 1
+                        stats["error"] = str(result.get("error", "테스트 발송 실패"))[:500]
                     continue
+                if stats is not None and result.get("group_id"):
+                    stats["group_ids"].append(result["group_id"])
 
             claimed = (
                 crew_db()
@@ -150,11 +170,16 @@ def _send_test_messages() -> None:
             )
             if claimed.data:
                 logger.info("[scheduled_sms] id=%s 테스트 발송 완료 recipients=%d", sms_id, len(phones))
+                if stats is not None and phones:
+                    stats["sent"] += len(phones)
         except Exception:
             logger.exception("[scheduled_sms] id=%s 테스트 처리 실패", sms_id)
+            if stats is not None:
+                stats["failed"] += 1
+                stats["error"] = f"테스트 처리 실패 scheduled_sms_id={sms_id}"
 
 
-def _send_due_messages() -> None:
+def _send_due_messages(stats: dict | None = None) -> None:
     now_iso = _utc_now_iso()
 
     try:
@@ -170,6 +195,8 @@ def _send_due_messages() -> None:
         )
     except Exception:
         logger.exception("[scheduled_sms] 본 발송 대상 조회 실패")
+        if stats is not None:
+            stats["error"] = "본 발송 대상 조회 실패"
         return
 
     for row in rows:
@@ -207,6 +234,9 @@ def _send_due_messages() -> None:
                     "updated_at": now_iso,
                 }).eq("id", sms_id).execute()
                 logger.error("[scheduled_sms] id=%s 발송 가능 번호 없음 user_ids=%d", sms_id, len(user_ids))
+                if stats is not None:
+                    stats["failed"] += 1
+                    stats["error"] = "발송 가능한 전화번호가 없습니다."
                 continue
 
             result = send_many(phones, sms["message_body"], sms["sender_number"])
@@ -217,7 +247,12 @@ def _send_due_messages() -> None:
                     "updated_at": now_iso,
                 }).eq("id", sms_id).execute()
                 logger.error("[scheduled_sms] id=%s 본 발송 실패", sms_id)
+                if stats is not None:
+                    stats["failed"] += len(phones)
+                    stats["error"] = str(result.get("error", "본 발송 실패"))[:500]
                 continue
+            if stats is not None and result.get("group_id"):
+                stats["group_ids"].append(result["group_id"])
 
             sent_iso = _utc_now_iso()
             crew_db().table("scheduled_sms").update({
@@ -233,8 +268,13 @@ def _send_due_messages() -> None:
 
             _insert_sms_log(sms, phones, result)
             logger.info("[scheduled_sms] id=%s 본 발송 완료 recipients=%d", sms_id, len(phones))
+            if stats is not None:
+                stats["sent"] += len(phones)
         except Exception as e:
             logger.exception("[scheduled_sms] id=%s 본 발송 예외", sms_id)
+            if stats is not None:
+                stats["failed"] += 1
+                stats["error"] = str(e)[:500]
             try:
                 crew_db().table("scheduled_sms").update({
                     "status": "failed",

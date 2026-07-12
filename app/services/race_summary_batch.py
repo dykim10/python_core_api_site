@@ -99,5 +99,19 @@ def batch_pending_race_summaries(live: bool = True) -> dict:
         except Exception as e:
             failed += 1
             logger.error(f"[RaceSummaryBatch] race_id={race['id']} 실패: {e}")
+            from app.services.system_log_service import db_log
+            db_log("ai", "error", f"race_id={race['id']} AI 요약 실패", {
+                "model": model_for("race_summarize"),
+                "endpoint": "batch_race_summaries",
+                "exception": type(e).__name__,
+            })
+
+    from app.services.system_log_service import db_log
+    if processed or failed:
+        db_log("ai", "info", "대회 종합 AI 요약 배치 완료", {
+            "processed": processed,
+            "skipped": skipped,
+            "failed": failed,
+        })
 
     return {"processed": processed, "skipped": skipped, "failed": failed}

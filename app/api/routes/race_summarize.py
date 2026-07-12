@@ -92,6 +92,18 @@ positives/negatives는 실제 후기에 언급된 내용만 포함하고, 없으
             keywords=parsed.get("keywords", []),
         )
     except json.JSONDecodeError:
+        from app.services.system_log_service import db_log
+        db_log("ai", "error", "AI 응답 파싱 실패", {
+            "model": model_for("race_summarize"),
+            "endpoint": "/api/races/summarize",
+            "exception": "JSONDecodeError",
+        })
         raise HTTPException(status_code=500, detail=f"AI 응답 파싱 실패: {raw}")
     except Exception as e:
+        from app.services.system_log_service import db_log
+        db_log("ai", "error", str(e)[:500], {
+            "model": model_for("race_summarize"),
+            "endpoint": "/api/races/summarize",
+            "exception": type(e).__name__,
+        })
         raise HTTPException(status_code=500, detail=str(e))
