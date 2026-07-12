@@ -18,7 +18,7 @@ def _header(title: str) -> None:
 
 
 def verify_db_log_insert() -> bool:
-    """§11: CORE public_db(live=True) -> system_logs insert."""
+    """§11: CORE public_db() -> system_logs insert."""
     _header("S11 PostgREST db_log insert")
     from app.core.database import public_db
     from app.services.system_log_service import db_log
@@ -27,7 +27,7 @@ def verify_db_log_insert() -> bool:
     db_log("backup", "info", f"PostgREST verify {marker}", {"verify": True, "marker": marker})
 
     rows = (
-        public_db(live=True)
+        public_db()
         .table("system_logs")
         .select("id, source, category, level, message, context")
         .ilike("message", f"%{marker}%")
@@ -67,7 +67,7 @@ def verify_scheduler_listener() -> bool:
     _job_listener(event)
 
     rows = (
-        public_db(live=True)
+        public_db()
         .table("system_logs")
         .select("id, category, level, message, context")
         .ilike("message", f"%{job_id}%")
@@ -98,7 +98,7 @@ def verify_scheduler_listener() -> bool:
         scheduled_run_time=run_time,
     )
     before = (
-        public_db(live=True)
+        public_db()
         .table("system_logs")
         .select("id", count="exact")
         .ilike("message", f"%{summary_job} 성공%")
@@ -107,7 +107,7 @@ def verify_scheduler_listener() -> bool:
     before_count = before.count or 0
     _job_listener(exec_event)
     after = (
-        public_db(live=True)
+        public_db()
         .table("system_logs")
         .select("id", count="exact")
         .ilike("message", f"%{summary_job} 성공%")
@@ -147,7 +147,7 @@ def verify_fastapi_500_handler() -> bool:
     from app.core.database import public_db
 
     rows = (
-        public_db(live=True)
+        public_db()
         .table("system_logs")
         .select("id, category, level, context")
         .eq("category", "app_error")
@@ -160,7 +160,7 @@ def verify_fastapi_500_handler() -> bool:
     # contains may not work on all postgrest — fallback ilike on message
     if not rows:
         rows = (
-            public_db(live=True)
+            public_db()
             .table("system_logs")
             .select("id, category, level, context, message")
             .eq("category", "app_error")
@@ -188,7 +188,7 @@ def verify_fastapi_500_handler() -> bool:
     _header("S9 V5 HTTPException 404 excluded")
     with TestClient(app, raise_server_exceptions=False) as client:
         before = (
-            public_db(live=True)
+            public_db()
             .table("system_logs")
             .select("id", count="exact")
             .eq("category", "app_error")
@@ -198,7 +198,7 @@ def verify_fastapi_500_handler() -> bool:
         )
         client.get("/__no-such-route-for-verify-404__")
         after = (
-            public_db(live=True)
+            public_db()
             .table("system_logs")
             .select("id", count="exact")
             .eq("category", "app_error")
