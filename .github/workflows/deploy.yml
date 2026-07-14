@@ -30,7 +30,7 @@ jobs:
             healthcheck() {
               for i in 1 2 3; do
                 sleep 3
-                curl -fsS -o /dev/null http://localhost:8000/health && return 0
+                curl -fsS -o /dev/null http://localhost:8100/health && return 0
               done
               return 1
             }
