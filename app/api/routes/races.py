@@ -10,6 +10,7 @@ from app.services.wa_sync_service import sync_wa_label_races
 from app.services.wa_sync_session import request_cancel
 from app.services.pilot_edition_date import lookup_pilot_race_date, lookup_pilot_years
 from app.services.race_edition_service import list_upcoming_editions
+from app.services.race_catalog_service import list_active_races
 from typing import List
 
 router = APIRouter(prefix="/api/races", tags=["races"])
@@ -30,16 +31,8 @@ def get_wa_label_races(year: int = 0, organiser: bool = False):
 
 @router.get("/", response_model=List[dict])
 def get_races(limit: int = 20):
-    res = (
-        review_db()
-        .table("races")
-        .select("*")
-        .eq("is_active", True)
-        .order("id", desc=True)
-        .limit(limit)
-        .execute()
-    )
-    return res.data
+    """활성 races 카탈로그 + 최신 edition 날짜(latest_race_date / latest_edition_year)."""
+    return list_active_races(limit=limit)
 
 
 @router.post("/sync/cancel", response_model=dict)
