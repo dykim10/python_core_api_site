@@ -92,6 +92,22 @@ def test_register_sender_auth_failure(mock_creds, mock_request):
 
 @patch("app.services.solapi_service._solapi_request")
 @patch("app.services.solapi_service._solapi_credentials")
+def test_register_sender_uses_ars_auth_type(mock_creds, mock_request):
+    mock_creds.return_value = ("key", "secret")
+    mock_request.side_effect = [
+        (201, {"senderIds": [{"phoneNumber": "01012345678", "status": "PENDING"}]}),
+        (200, {"mfa": {"transactionId": "tx-abc"}}),
+    ]
+
+    svc.register_sender("01012345678")
+
+    auth_call = mock_request.call_args_list[1]
+    mfa_header = auth_call.kwargs["extra_headers"]["x-mfa-data"]
+    assert '"authType": "ARS"' in mfa_header or '"authType":"ARS"' in mfa_header.replace(" ", "")
+
+
+@patch("app.services.solapi_service._solapi_request")
+@patch("app.services.solapi_service._solapi_credentials")
 def test_verify_sender_success(mock_creds, mock_request):
     mock_creds.return_value = ("key", "secret")
     svc._store_pending_mfa("01012345678", "tx-abc")
