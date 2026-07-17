@@ -59,6 +59,7 @@ def list_upcoming_editions(limit: int = 80) -> list[dict[str, Any]]:
             continue
         rows.append({
             "id": row["id"],
+            "race_id": row.get("race_id"),
             "race_name": race_name,
             "race_date": str(race_date)[:10] if race_date else None,
             "year": row.get("year"),
